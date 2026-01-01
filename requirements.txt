@@ -1,0 +1,45 @@
+# =============================================================================
+# Extended MM Bot - Dependencies
+# =============================================================================
+# Python >= 3.10 required
+
+# HTTP client async
+aiohttp>=3.9.0
+aiohttp-retry>=2.8.0
+
+# WebSocket client
+websockets>=12.0
+
+# Configuration
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Stark signing (crypto)
+starknet-py>=0.20.0
+# Fallback if starknet-py not available:
+# ecdsa>=0.18.0
+# sympy>=1.12
+
+# Utilities
+orjson>=3.9.0  # Fast JSON
+tenacity>=8.2.0  # Retry logic
+
+# CLI
+click>=8.1.0
+rich>=13.7.0  # Pretty console output
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.12.0
+
+# Development (optional)
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.7.0
+ruff>=0.1.0
+
+# Type stubs
+types-PyYAML>=6.0.0

@@ -1,0 +1,142 @@
+# =============================================================================
+# MAINNET_CONSERVATIVE_200USD Profile
+# =============================================================================
+# Profil conservator pentru mainnet cu buget de $200 USD.
+# Optimizat pentru captarea spread-ului cu risc minim.
+# =============================================================================
+
+# Mod de operare
+dry_run: false  # LIVE pe mainnet!
+log_level: "INFO"
+metrics_interval_sec: 60  # Rapoarte la fiecare minut
+
+# ===== STRATEGY PARAMETERS =====
+strategy:
+  # Market - alege un market lichid
+  # ETH-USDC sau BTC-USDC sunt de obicei cele mai lichide
+  market: "ETH-USDC"
+  
+  # Dimensiunea ordinelor (USD)
+  # $10-12 per ordine = ~5-6% din buget per ordine
+  # Suficient de mare pentru fees, dar nu prea riscant
+  order_notional_usd: 10.0
+  
+  # Număr maxim de ordine per parte
+  # 1-2 ordine pe fiecare parte
+  max_open_orders_per_side: 1
+  
+  # Spread (în basis points, 1 bps = 0.01%)
+  # Moderat: 12-100 bps
+  # Mai strâns decât testnet pentru a avea șansă de fill
+  spread_min_bps: 12.0     # Minim 0.12%
+  spread_max_bps: 100.0    # Maxim 1.00%
+  
+  # Refresh interval
+  # Mai frecvent pe mainnet pentru a rămâne competitiv
+  refresh_sec: 4.0
+  
+  # Requote pe mișcare mid price
+  # Requote dacă mid se mișcă > 8 bps
+  mid_move_requote_bps: 8.0
+  
+  # Pauză la volatilitate
+  # Intră în pauză dacă mid se mișcă > 40 bps în 12 secunde
+  pause_move_bps: 40.0
+  pause_window_sec: 12.0
+  cooldown_after_pause_sec: 30.0
+  
+  # Ajustare spread pe volatilitate
+  volatility_lookback_sec: 45.0
+  volatility_spread_multiplier: 2.5
+
+# ===== RISK PARAMETERS =====
+risk:
+  # Limite de inventar (USD)
+  # Max 25% din buget în inventar = $50
+  max_inventory_usd: 50.0
+  
+  # Max 40% din buget în poziție notional = $80
+  max_position_notional: 80.0
+  
+  # Fără leverage pentru a minimiza riscul
+  max_leverage: 1.0
+  
+  # Kill switch - oprește botul
+  # La $20 drawdown (~10% din buget), oprește tot
+  kill_switch_drawdown_usd: 20.0
+  session_drawdown_pct: 10.0
+  daily_drawdown_limit_usd: 25.0  # $25/zi max pierdere
+  
+  # Tracking fills negative
+  # Dacă 4+ fills negative în ultimele 6, pause
+  max_negative_fills_window: 6
+  negative_fills_pause_threshold: 4
+  
+  # Inventory skew
+  # Agresivitate moderată în ajustarea quotes
+  inventory_skew_factor: 0.6
+
+# ===== ORDER EXECUTION =====
+order:
+  # POST_ONLY - esențial pentru market making
+  post_only: true
+  
+  # Risk-off cu taker - OPȚIONAL
+  # Activat doar în cazuri extreme:
+  # - Inventory > 80% din max
+  # - Volatilitate > 100 bps în lookback window
+  # - Folosește limit IOC cu offset conservator
+  use_taker_for_risk_off: true
+  taker_offset_bps: 15.0  # 0.15% offset pentru IOC
+  
+  # Condiții pentru risk-off taker:
+  # 1. inventory_ratio > 0.8 (peste 80% din max)
+  # 2. volatility_bps > 80 (volatilitate ridicată)
+  # 3. kill switch NU e declanșat (încă avem spațiu)
+  taker_risk_off_inventory_threshold: 0.8
+  taker_risk_off_volatility_threshold_bps: 80.0
+  
+  # Expirare ordine (secunde)
+  order_expiration_sec: 3600  # 1 oră
+  
+  # Cancel before replace
+  cancel_before_replace: true
+  
+  # Retry pe erori
+  max_retries: 3
+  retry_delay_sec: 1.0
+
+# =============================================================================
+# AVERTISMENTE MAINNET
+# =============================================================================
+# ⚠️  BANI REALI - RISC DE PIERDERE
+# 
+# 1. Pornește ÎNTOTDEAUNA cu dry_run: true prima dată
+# 2. Verifică balance, fees, și market info înainte
+# 3. Monitorizează activ primele 30-60 minute
+# 4. Setează alerte pentru:
+#    - Drawdown > $10
+#    - Inventory > $30
+#    - Pauze frecvente (volatilitate)
+# 5. Nu lăsa botul să ruleze nesupravegheai noaptea în prima săptămână
+# 6. Verifică daily P&L și ajustează parametrii
+#
+# LIMITE DE SIGURANȚĂ (RECOMANDAT):
+# - Max runtime inițial: 4-6 ore
+# - Max pierdere zilnică: $25 (kill switch + oprire manuală)
+# - Verifică la fiecare 30 min în primele zile
+# =============================================================================
+
+# =============================================================================
+# OPTIMIZARE GRADUALĂ
+# =============================================================================
+# După 1 săptămână de rulare stabilă:
+# - Dacă P&L pozitiv și fills regulate: poți reduce spread_min_bps la 10
+# - Dacă inventory stabil: poți crește order_notional_usd la 12-15
+# - Dacă rare pauses: poți reduce pause_move_bps la 35
+# 
+# După 1 lună:
+# - Evaluează metrics: win rate, avg profit per fill, drawdowns
+# - Ajustează parametrii în funcție de performance
+# - Consideră adăugarea unui al doilea ordine per side (max_open_orders: 2)
+# =============================================================================
