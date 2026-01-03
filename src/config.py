@@ -110,9 +110,9 @@ def load_env_credentials() -> dict:
     
     return {
         "api_key": os.getenv("EXTENDED_API_KEY", ""),
-        "stark_private_key": os.getenv("STARK_PRIVATE_KEY", ""),
-        "account_address": os.getenv("ACCOUNT_ADDRESS", ""),
-        "vault_id": os.getenv("VAULT_ID", ""),
+        "stark_private_key": os.getenv("EXTENDED_STARK_PRIVATE_KEY", ""),
+        "account_address": os.getenv("EXTENDED_ACCOUNT_ADDRESS", ""),
+        "vault_id": os.getenv("EXTENDED_VAULT_ID", ""),
     }
 
 

@@ -10,9 +10,10 @@ from enum import Enum
 from typing import Optional
 import logging
 
+from decimal import Decimal
 from .config import BotConfig
 from .api_client import ExtendedAPIClient, APIResponse
-from .signing import StarkSigner, OrderBuilder
+from .signing import StarkSigner, OrderBuilder, create_order_builder, generate_client_id
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +99,14 @@ class OrderManager:
         self,
         config: BotConfig,
         api_client: ExtendedAPIClient,
-        signer: StarkSigner
+        private_key: str
     ):
         self.config = config
         self.api = api_client
-        self.order_builder = OrderBuilder(
-            signer=signer,
-            vault_id=config.vault_id,
-            default_expiration_sec=config.order.order_expiration_sec
+        self.order_builder = create_order_builder(
+            private_key=private_key,
+            vault=config.vault_id,
+            is_testnet=True  # TODO: make configurable
         )
         
         # Order tracking
@@ -139,9 +140,17 @@ class OrderManager:
             return
         
         exchange_orders = response.data if response.data else []
-        
+
+        # Handle case where data might be wrapped in a dict
+        if isinstance(exchange_orders, dict):
+            exchange_orders = exchange_orders.get("orders", exchange_orders.get("data", []))
+
         # Update internal tracking
         for order_data in exchange_orders:
+            # Skip if not a dict (handle unexpected data format)
+            if not isinstance(order_data, dict):
+                logger.warning(f"Unexpected order data format: {type(order_data)}")
+                continue
             order_id = order_data.get("orderId", order_data.get("id", ""))
             client_id = order_data.get("clientId", "")
             
@@ -182,16 +191,16 @@ class OrderManager:
             return None
         
         # Build signed order
+        client_id = generate_client_id()
         order_payload = self.order_builder.build_limit_order(
             market=market,
             side=side,
-            size=size,
-            price=price,
-            fee=self._maker_fee,
-            post_only=self.config.order.post_only
+            size=Decimal(str(size)),
+            price=Decimal(str(price)),
+            post_only=self.config.order.post_only,
+            client_id=client_id,
+            expiration_sec=self.config.order.order_expiration_sec
         )
-        
-        client_id = order_payload["clientId"]
         
         # Create internal tracking
         order = ManagedOrder(
@@ -207,8 +216,12 @@ class OrderManager:
         )
         
         self._orders[client_id] = order
-        
-        # Place order
+
+        # Place order - log full payload for debugging
+        import json
+        logger.info(f"Placing order: {side} {size} @ {price}")
+        logger.debug(f"Order payload: {json.dumps({k: v for k, v in order_payload.items() if k != 'settlement'})}")
+        logger.debug(f"Settlement starkKey: {order_payload.get('settlement', {}).get('starkKey', 'N/A')}")
         response = await self.api.create_order(order_payload)
         
         if response.success:
@@ -262,15 +275,25 @@ class OrderManager:
             cancel_existing: Cancel existing quotes first
         """
         market = self.config.strategy.market
-        
+
         # Cancel existing quotes
         if cancel_existing:
             await self.cancel_all_quotes(market)
-        
-        # Place both quotes
-        bid = await self.place_quote("BUY", bid_price, bid_size, cancel_existing=False)
-        ask = await self.place_quote("SELL", ask_price, ask_size, cancel_existing=False)
-        
+
+        # Place both quotes (skip if size/price is 0)
+        bid = None
+        ask = None
+
+        if bid_size > 0 and bid_price > 0:
+            bid = await self.place_quote("BUY", bid_price, bid_size, cancel_existing=False)
+        else:
+            logger.debug(f"Skipping BID order: size={bid_size}, price={bid_price}")
+
+        if ask_size > 0 and ask_price > 0:
+            ask = await self.place_quote("SELL", ask_price, ask_size, cancel_existing=False)
+        else:
+            logger.debug(f"Skipping ASK order: size={ask_size}, price={ask_price}")
+
         return QuotePair(bid=bid, ask=ask)
     
     async def cancel_order(self, client_id: str) -> bool:
@@ -356,16 +379,13 @@ class OrderManager:
             price = current_mid * (1 + offset_bps / 10000)
         
         size = abs(position_size)
-        
-        # Build IOC order (use taker fee)
-        taker_fee = self._maker_fee * 2  # Estimate taker fee as 2x maker
-        
+
+        # Build IOC order
         order_payload = self.order_builder.build_ioc_order(
             market=market,
             side=side,
-            size=size,
-            price=price,
-            fee=taker_fee,
+            size=Decimal(str(size)),
+            price=Decimal(str(price)),
             reduce_only=True
         )
         

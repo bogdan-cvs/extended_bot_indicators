@@ -384,24 +384,32 @@ class RiskManager:
         """
         if self.state.state != BotState.RUNNING:
             return False, f"Bot is {self.state.state.value}"
-        
+
         # Check if order would exceed inventory limits
         current_inv = self.state.inventory_usd
         position_size = self.state.position.size
-        
+
+        # Determine if this order would reduce position (close/reduce inventory)
+        is_reducing = (side == "BUY" and position_size < 0) or (side == "SELL" and position_size > 0)
+
         # Estimate new inventory after fill
-        if side == "BUY":
-            new_inv = current_inv + notional_usd if position_size >= 0 else max(0, current_inv - notional_usd)
+        if is_reducing:
+            new_inv = max(0, current_inv - notional_usd)
         else:
-            new_inv = current_inv + notional_usd if position_size <= 0 else max(0, current_inv - notional_usd)
-        
+            new_inv = current_inv + notional_usd
+
+        # Always allow orders that reduce position (even if over limits)
+        if is_reducing:
+            return True, ""
+
+        # Only block orders that would increase position beyond limits
         if new_inv > self.risk_config.max_inventory_usd:
             return False, f"Would exceed max inventory: ${new_inv:.2f} > ${self.risk_config.max_inventory_usd:.2f}"
-        
+
         # Check position notional
         if new_inv > self.risk_config.max_position_notional:
             return False, f"Would exceed max position: ${new_inv:.2f} > ${self.risk_config.max_position_notional:.2f}"
-        
+
         return True, ""
     
     def record_error(self, error: str):

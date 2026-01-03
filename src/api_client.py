@@ -189,23 +189,23 @@ class ExtendedAPIClient:
     
     async def get_markets(self) -> APIResponse:
         """Get list of available markets."""
-        return await self._request("GET", "/markets")
+        return await self._request("GET", "/info/markets")
     
     async def get_market(self, market: str) -> APIResponse:
         """Get market details including tick size and min size."""
-        return await self._request("GET", f"/markets/{market}")
+        return await self._request("GET", "/info/markets", params={"market": market})
     
     async def get_orderbook(self, market: str, depth: int = 20) -> APIResponse:
         """Get current order book snapshot."""
-        return await self._request("GET", f"/markets/{market}/orderbook", params={"depth": depth})
+        return await self._request("GET", f"/info/markets/{market}/orderbook", params={"depth": depth})
     
     async def get_trades(self, market: str, limit: int = 50) -> APIResponse:
         """Get recent trades."""
-        return await self._request("GET", f"/markets/{market}/trades", params={"limit": limit})
+        return await self._request("GET", f"/info/markets/{market}/trades", params={"limit": limit})
     
     async def get_ticker(self, market: str) -> APIResponse:
         """Get market ticker (price, 24h volume, etc.)."""
-        return await self._request("GET", f"/markets/{market}/ticker")
+        return await self._request("GET", f"/info/markets/{market}/stats")
     
     # ==================== ACCOUNT ENDPOINTS ====================
     
@@ -269,8 +269,8 @@ class ExtendedAPIClient:
         if self.config.dry_run:
             logger.info(f"[DRY RUN] Would cancel order: {order_id}")
             return APIResponse(success=True, data={"orderId": order_id, "status": "cancelled"})
-        
-        return await self._request("DELETE", f"/user/orders/{order_id}")
+
+        return await self._request("DELETE", f"/user/order/{order_id}")
     
     async def cancel_order_by_client_id(self, client_id: str) -> APIResponse:
         """Cancel an order by client ID."""
@@ -285,9 +285,15 @@ class ExtendedAPIClient:
         if self.config.dry_run:
             logger.info(f"[DRY RUN] Would cancel all orders" + (f" for {market}" if market else ""))
             return APIResponse(success=True, data={"cancelled": 0})
-        
-        params = {"market": market} if market else None
-        return await self._request("DELETE", "/user/orders", params=params)
+
+        # Use massCancel endpoint per SDK
+        payload = {}
+        if market:
+            payload["markets"] = [market]
+        else:
+            payload["cancelAll"] = True
+
+        return await self._request("POST", "/user/order/massCancel", json_data=payload)
     
     async def set_dead_man_switch(self, timeout_sec: int) -> APIResponse:
         """
@@ -325,8 +331,18 @@ class ExtendedAPIClient:
         response = await self.get_market(market)
         if not response.success:
             raise APIError(f"Failed to get market info: {response.error}")
-        
-        return response.data
+
+        # Response is {'status': 'OK', 'data': [market_info, ...]}
+        # Extract the first market from the list
+        data = response.data
+        if isinstance(data, dict) and "data" in data:
+            markets = data["data"]
+            if markets and len(markets) > 0:
+                return markets[0]
+        elif isinstance(data, list) and len(data) > 0:
+            return data[0]
+
+        return data
     
     async def get_maker_fee(self, market: str) -> float:
         """Get maker fee rate for a market."""

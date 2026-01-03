@@ -1,165 +1,354 @@
 """
-Stark signature module for Extended Exchange.
-Handles order signing using Stark curve cryptography.
+Signing module for Extended Exchange API.
+Uses SNIP12 (EIP712 for Starknet) format for order signing.
 """
 
-import hashlib
 import time
 from dataclasses import dataclass
-from typing import Optional
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from typing import Tuple, Optional
 import logging
 
-# Try to import starknet libraries
-try:
-    from starknet_py.hash.utils import pedersen_hash
-    from starknet_py.net.signer.stark_curve_signer import StarkCurveSigner, KeyPair
-    STARKNET_AVAILABLE = True
-except ImportError:
-    STARKNET_AVAILABLE = False
-    print("Warning: starknet-py not installed. Using mock signing for testing.")
+from fast_stark_crypto import get_order_msg_hash, sign, get_public_key
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class OrderData:
-    """Order data structure for signing."""
-    market: str
-    side: str  # "BUY" or "SELL"
-    order_type: str  # "LIMIT", "MARKET"
-    size: str  # Size as string (decimal)
-    price: str  # Price as string (decimal)
-    time_in_force: str  # "GTC", "IOC", "FOK", "POST_ONLY"
-    fee: str  # Fee as string (decimal)
-    expiration: int  # Unix timestamp
-    nonce: Optional[int] = None
-    client_id: Optional[str] = None
-    reduce_only: bool = False
-    post_only: bool = False
+class StarknetDomain:
+    """Starknet domain for SNIP12 signing."""
+    name: str = "Perpetuals"
+    version: str = "v0"
+    chain_id: str = "SN_SEPOLIA"  # SN_MAIN for mainnet
+    revision: str = "1"
+
+
+@dataclass
+class MarketL2Config:
+    """L2 configuration for a market."""
+    synthetic_id: str  # hex string like "0x4254432d555344"
+    synthetic_resolution: int  # e.g., 10000000000 for BTC
+    collateral_id: str  # "0x1" for USDC
+    collateral_resolution: int  # 1000000 (6 decimals)
+    qty_precision: int = 2  # decimal places for quantity
+    price_precision: int = 2  # decimal places for price
+
+
+# Default market configs - these will be updated from API
+MARKET_L2_CONFIGS = {
+    "BTC-USD": MarketL2Config(
+        synthetic_id="0x4254432d555344",
+        synthetic_resolution=10000000000,
+        collateral_id="0x1",
+        collateral_resolution=1000000,
+    ),
+    "ETH-USD": MarketL2Config(
+        synthetic_id="0x4554482d555344",
+        synthetic_resolution=100000000,
+        collateral_id="0x1",
+        collateral_resolution=1000000,
+    ),
+    "AAVE-USD": MarketL2Config(
+        synthetic_id="0x414156452d33000000000000000000",  # From API
+        synthetic_resolution=1000,  # From API
+        collateral_id="0x31857064564ed0ff978e687456963cba09c2c6985d8f9300a1de4962fafa054",  # From API
+        collateral_resolution=1000000,  # From API
+    ),
+}
 
 
 class StarkSigner:
-    """
-    Handles Stark curve signing for Extended Exchange orders.
-    """
-    
-    def __init__(self, private_key: str, account_address: str = ""):
-        self.private_key = private_key
-        self.account_address = account_address
-        self._key_pair = None
-        
-        if STARKNET_AVAILABLE and private_key:
-            try:
-                # Convert hex string to int
-                private_key_int = int(private_key, 16) if private_key.startswith("0x") else int(private_key, 16)
-                self._key_pair = KeyPair.from_private_key(private_key_int)
-                logger.info("StarkSigner initialized with real signing")
-            except Exception as e:
-                logger.warning(f"Failed to initialize StarkSigner: {e}. Using mock signing.")
-                self._key_pair = None
-    
-    def get_public_key(self) -> str:
-        """Get the public key in hex format."""
-        if self._key_pair:
-            return hex(self._key_pair.public_key)
-        return "0x0"
-    
-    def sign_order(self, order: OrderData, vault_id: str = "") -> dict:
+    """Stark curve signer for Extended Exchange."""
+
+    def __init__(self, private_key: str):
         """
-        Sign an order and return the signature components.
-        
+        Initialize signer with private key.
+
+        Args:
+            private_key: Hex string private key (with or without 0x prefix)
+        """
+        if private_key.startswith("0x"):
+            private_key = private_key[2:]
+        self._private_key = int(private_key, 16)
+        self._public_key = get_public_key(self._private_key)
+
+    @property
+    def public_key(self) -> int:
+        """Get public key as integer."""
+        return self._public_key
+
+    @property
+    def public_key_hex(self) -> str:
+        """Get public key as hex string."""
+        return hex(self._public_key)
+
+    def sign(self, msg_hash: int) -> Tuple[int, int]:
+        """
+        Sign a message hash.
+
+        Args:
+            msg_hash: Message hash as integer
+
         Returns:
-            dict with 'r', 's' signature components and 'public_key'
+            Tuple of (r, s) signature components
         """
-        # Build the order hash
-        order_hash = self._compute_order_hash(order, vault_id)
-        
-        if self._key_pair and STARKNET_AVAILABLE:
-            # Real signing
-            signature = self._key_pair.sign(order_hash)
-            return {
-                "r": hex(signature[0]),
-                "s": hex(signature[1]),
-                "public_key": self.get_public_key(),
-                "order_hash": hex(order_hash)
-            }
+        return sign(self._private_key, msg_hash)
+
+
+class OrderBuilder:
+    """
+    Builds and signs orders for Extended Exchange API.
+    Uses SNIP12 format compatible with the exchange.
+    """
+
+    def __init__(
+        self,
+        signer: StarkSigner,
+        vault: int,
+        domain: Optional[StarknetDomain] = None
+    ):
+        """
+        Initialize order builder.
+
+        Args:
+            signer: StarkSigner instance
+            vault: Vault/position ID for collateral
+            domain: Starknet domain for signing (default testnet)
+        """
+        self.signer = signer
+        self.vault = vault
+        self.domain = domain or StarknetDomain()
+
+    def build_limit_order(
+        self,
+        market: str,
+        side: str,
+        size: Decimal,
+        price: Decimal,
+        post_only: bool = True,
+        reduce_only: bool = False,
+        client_id: Optional[str] = None,
+        expiration_sec: int = 3600,
+        l2_config: Optional[MarketL2Config] = None,
+    ) -> dict:
+        """
+        Build a signed limit order.
+
+        Args:
+            market: Market name (e.g., "BTC-USD")
+            side: "BUY" or "SELL"
+            size: Order size in base currency
+            price: Limit price
+            post_only: If True, order will be maker-only
+            reduce_only: If True, order can only reduce position
+            client_id: Optional client order ID
+            expiration_sec: Order expiration in seconds from now
+            l2_config: Market L2 config (fetched if not provided)
+
+        Returns:
+            Signed order payload ready for API submission
+        """
+        # Get L2 config
+        if l2_config is None:
+            l2_config = MARKET_L2_CONFIGS.get(market)
+            if l2_config is None:
+                raise ValueError(f"Unknown market: {market}. Please provide l2_config.")
+
+        import math
+        import random
+
+        # Generate nonce - random 32-bit int like SDK
+        nonce = random.randint(0, 2**32 - 1)
+
+        # Calculate expiration timestamp
+        expiration_ts = int(time.time()) + expiration_sec
+        # Settlement expiration: add 14 days buffer like SDK, use Unix seconds
+        settlement_expiration = math.ceil(expiration_ts + 14 * 24 * 3600)
+
+        # Round size and price BEFORE computing hash
+        # This is critical - the hash must be computed with the same values sent to API
+        size_rounded = Decimal(str(round(float(size), l2_config.qty_precision)))
+        price_rounded = Decimal(str(round(float(price), l2_config.price_precision)))
+
+        # Per SDK:
+        # BUY: synthetic rounding=ROUND_UP, collateral rounding=ROUND_UP (paying more)
+        # SELL: synthetic rounding=ROUND_DOWN, collateral rounding=ROUND_DOWN (receiving less)
+        is_buy = side.upper() == "BUY"
+        rounding_context = ROUND_UP if is_buy else ROUND_DOWN
+
+        # Calculate stark amounts using ROUNDED values and correct rounding
+        synthetic_amount = self._to_stark_amount(size_rounded, l2_config.synthetic_resolution, rounding_context)
+        collateral_amount = self._to_stark_amount(size_rounded * price_rounded, l2_config.collateral_resolution, rounding_context)
+
+        # Per SDK: BUY = synthetic positive, collateral NEGATIVE
+        #          SELL = synthetic NEGATIVE, collateral positive
+        if is_buy:
+            base_amount = synthetic_amount    # positive - receiving synthetic
+            quote_amount = -collateral_amount  # negative - paying collateral
         else:
-            # Mock signing for dry-run/testing
-            mock_sig = self._mock_sign(order_hash)
-            return {
-                "r": mock_sig["r"],
-                "s": mock_sig["s"],
-                "public_key": "0x0",
-                "order_hash": hex(order_hash) if isinstance(order_hash, int) else order_hash
-            }
-    
-    def _compute_order_hash(self, order: OrderData, vault_id: str) -> int:
+            base_amount = -synthetic_amount   # negative - giving synthetic
+            quote_amount = collateral_amount   # positive - receiving collateral
+
+        # Calculate fee using taker_fee_rate - always ROUND_UP per SDK
+        fee_rate = Decimal("0.0005")
+        fee_amount = self._to_stark_amount(size_rounded * price_rounded * fee_rate, l2_config.collateral_resolution, ROUND_UP)
+
+        # Compute order hash using SNIP12
+        order_hash = get_order_msg_hash(
+            position_id=self.vault,
+            base_asset_id=int(l2_config.synthetic_id, 16),
+            base_amount=base_amount,
+            quote_asset_id=int(l2_config.collateral_id, 16),
+            quote_amount=quote_amount,
+            fee_amount=fee_amount,
+            fee_asset_id=int(l2_config.collateral_id, 16),
+            expiration=settlement_expiration,
+            salt=nonce,
+            user_public_key=self.signer.public_key,
+            domain_name=self.domain.name,
+            domain_version=self.domain.version,
+            domain_chain_id=self.domain.chain_id,
+            domain_revision=self.domain.revision,
+        )
+
+        # Sign the hash
+        r, s = self.signer.sign(order_hash)
+
+        # Build order ID from hash if not provided
+        order_id = client_id or str(order_hash)
+
+        # Build the order payload using already-rounded values
+        # NOTE: Extended testnet has a bug where SELL orders with postOnly=True
+        # are silently rejected by settlement layer. Force postOnly=False for SELL.
+        effective_post_only = post_only if is_buy else False
+
+        order_payload = {
+            "id": order_id,
+            "market": market,
+            "type": "LIMIT",
+            "side": side.upper(),
+            "qty": str(size_rounded),
+            "price": str(price_rounded),
+            "postOnly": effective_post_only,
+            "reduceOnly": reduce_only,
+            "timeInForce": "GTT",
+            "expiryEpochMillis": expiration_ts * 1000,
+            "fee": str(fee_rate),
+            "nonce": str(nonce),
+            "selfTradeProtectionLevel": "ACCOUNT",
+            "settlement": {
+                "signature": {
+                    "r": hex(r),
+                    "s": hex(s),
+                },
+                "starkKey": self.signer.public_key_hex,
+                "collateralPosition": str(self.vault),
+            },
+        }
+
+        if not is_buy and post_only:
+            logger.debug(f"SELL order: forcing postOnly=False due to Extended testnet limitation")
+
+        logger.debug(
+            f"Built order: {side} {size} {market} @ {price}, "
+            f"hash={hex(order_hash)}, nonce={nonce}, postOnly={effective_post_only}"
+        )
+
+        return order_payload
+
+    def build_ioc_order(
+        self,
+        market: str,
+        side: str,
+        size: Decimal,
+        price: Decimal,
+        reduce_only: bool = False,
+        client_id: Optional[str] = None,
+        l2_config: Optional[MarketL2Config] = None,
+    ) -> dict:
         """
-        Compute the Pedersen hash of the order.
-        
-        Note: The exact hash structure depends on the Extended Exchange specification.
-        This is a placeholder implementation - adjust based on actual docs.
+        Build a signed IOC (Immediate-Or-Cancel) order.
+
+        Args:
+            market: Market name
+            side: "BUY" or "SELL"
+            size: Order size
+            price: Limit price
+            reduce_only: If True, order can only reduce position
+            client_id: Optional client order ID
+            l2_config: Market L2 config
+
+        Returns:
+            Signed order payload
         """
-        if not STARKNET_AVAILABLE:
-            # Return a mock hash for testing
-            order_str = f"{order.market}{order.side}{order.size}{order.price}{order.expiration}"
-            return int(hashlib.sha256(order_str.encode()).hexdigest(), 16) % (2**251)
-        
-        try:
-            # Build hash chain using Pedersen hash
-            # The exact order and encoding depends on the exchange specification
-            
-            # Convert market to felt (simplified)
-            market_felt = int.from_bytes(order.market.encode()[:31], 'big')
-            
-            # Side: 0 for BUY, 1 for SELL
-            side_felt = 0 if order.side.upper() == "BUY" else 1
-            
-            # Convert size and price to fixed-point integers
-            # Assuming 8 decimal places
-            size_felt = int(float(order.size) * 10**8)
-            price_felt = int(float(order.price) * 10**8)
-            fee_felt = int(float(order.fee) * 10**8)
-            
-            # Build hash chain
-            h = pedersen_hash(market_felt, side_felt)
-            h = pedersen_hash(h, size_felt)
-            h = pedersen_hash(h, price_felt)
-            h = pedersen_hash(h, fee_felt)
-            h = pedersen_hash(h, order.expiration)
-            
-            if order.nonce is not None:
-                h = pedersen_hash(h, order.nonce)
-            
-            return h
-            
-        except Exception as e:
-            logger.error(f"Error computing order hash: {e}")
-            # Fallback to mock hash
-            order_str = f"{order.market}{order.side}{order.size}{order.price}{order.expiration}"
-            return int(hashlib.sha256(order_str.encode()).hexdigest(), 16) % (2**251)
-    
-    def _mock_sign(self, message_hash: int) -> dict:
-        """Generate a mock signature for testing/dry-run."""
-        # Use deterministic mock signatures based on the hash
-        hash_bytes = message_hash.to_bytes(32, 'big') if isinstance(message_hash, int) else bytes.fromhex(message_hash[2:] if message_hash.startswith('0x') else message_hash)
-        r = int(hashlib.sha256(b"r" + hash_bytes).hexdigest(), 16) % (2**251)
-        s = int(hashlib.sha256(b"s" + hash_bytes).hexdigest(), 16) % (2**251)
-        return {"r": hex(r), "s": hex(s)}
-    
-    def verify_signature(self, order_hash: int, r: int, s: int) -> bool:
-        """Verify a signature (for testing purposes)."""
-        if not STARKNET_AVAILABLE or not self._key_pair:
-            return True  # Mock verification
-        
-        try:
-            # Verification would use the public key
-            # This is a simplified placeholder
-            return True
-        except Exception:
-            return False
+        order = self.build_limit_order(
+            market=market,
+            side=side,
+            size=size,
+            price=price,
+            post_only=False,
+            reduce_only=reduce_only,
+            client_id=client_id,
+            expiration_sec=60,  # Short expiration for IOC
+            l2_config=l2_config,
+        )
+        order["timeInForce"] = "IOC"
+        return order
+
+    def _to_stark_amount(self, amount: Decimal, resolution: int, rounding=ROUND_DOWN) -> int:
+        """Convert decimal amount to stark integer amount."""
+        stark_amount = amount * Decimal(resolution)
+        return int(stark_amount.quantize(Decimal("1"), rounding=rounding))
 
 
+def create_order_builder(
+    private_key: str,
+    vault: int,
+    is_testnet: bool = True
+) -> OrderBuilder:
+    """
+    Create an OrderBuilder instance.
+
+    Args:
+        private_key: Stark private key (hex string)
+        vault: Vault/position ID
+        is_testnet: True for testnet, False for mainnet
+
+    Returns:
+        Configured OrderBuilder instance
+    """
+    signer = StarkSigner(private_key)
+    domain = StarknetDomain(
+        chain_id="SN_SEPOLIA" if is_testnet else "SN_MAIN"
+    )
+    return OrderBuilder(signer, vault, domain)
+
+
+def update_market_l2_config(market: str, config: dict):
+    """
+    Update L2 config for a market from API response.
+
+    Args:
+        market: Market name
+        config: L2 config dict from API (l2Config from /info/markets endpoint)
+    """
+    # API uses syntheticId/collateralId (not syntheticAssetId/collateralAssetId)
+    synthetic_id = config.get("syntheticId", config.get("syntheticAssetId", config.get("synthetic_asset_id")))
+    collateral_id = config.get("collateralId", config.get("collateralAssetId", config.get("collateral_asset_id")))
+
+    # Get existing config as fallback
+    existing = MARKET_L2_CONFIGS.get(market)
+
+    MARKET_L2_CONFIGS[market] = MarketL2Config(
+        synthetic_id=synthetic_id or (existing.synthetic_id if existing else "0x0"),
+        synthetic_resolution=int(config.get("syntheticResolution", config.get("synthetic_resolution", 100000000))),
+        collateral_id=collateral_id or (existing.collateral_id if existing else "0x1"),
+        collateral_resolution=int(config.get("collateralResolution", config.get("collateral_resolution", 1000000))),
+    )
+    logger.info(f"Updated L2 config for {market}: {MARKET_L2_CONFIGS[market]}")
+
+
+# Legacy compatibility - keep for order_manager.py imports
 def generate_nonce() -> int:
     """Generate a unique nonce for an order."""
     return int(time.time() * 1000000)
@@ -174,128 +363,3 @@ def generate_client_id(prefix: str = "mm") -> str:
 def get_expiration(seconds_from_now: int = 3600) -> int:
     """Get expiration timestamp (Unix seconds)."""
     return int(time.time()) + seconds_from_now
-
-
-class OrderBuilder:
-    """Helper class to build signed orders."""
-    
-    def __init__(self, signer: StarkSigner, vault_id: str = "", default_expiration_sec: int = 3600):
-        self.signer = signer
-        self.vault_id = vault_id
-        self.default_expiration_sec = default_expiration_sec
-    
-    def build_limit_order(
-        self,
-        market: str,
-        side: str,
-        size: float,
-        price: float,
-        fee: float,
-        post_only: bool = True,
-        reduce_only: bool = False,
-        client_id: str = None,
-        expiration_sec: int = None
-    ) -> dict:
-        """
-        Build a signed limit order payload.
-        
-        Returns:
-            dict ready to be sent to the API
-        """
-        expiration = get_expiration(expiration_sec or self.default_expiration_sec)
-        client_id = client_id or generate_client_id()
-        
-        order_data = OrderData(
-            market=market,
-            side=side.upper(),
-            order_type="LIMIT",
-            size=f"{size:.8f}",
-            price=f"{price:.8f}",
-            time_in_force="POST_ONLY" if post_only else "GTC",
-            fee=f"{fee:.8f}",
-            expiration=expiration,
-            nonce=generate_nonce(),
-            client_id=client_id,
-            reduce_only=reduce_only,
-            post_only=post_only
-        )
-        
-        # Sign the order
-        signature = self.signer.sign_order(order_data, self.vault_id)
-        
-        # Build API payload
-        payload = {
-            "market": order_data.market,
-            "side": order_data.side,
-            "type": order_data.order_type,
-            "size": order_data.size,
-            "price": order_data.price,
-            "timeInForce": order_data.time_in_force,
-            "fee": order_data.fee,
-            "expiration": order_data.expiration,
-            "clientId": order_data.client_id,
-            "reduceOnly": order_data.reduce_only,
-            "postOnly": order_data.post_only,
-            "signature": {
-                "r": signature["r"],
-                "s": signature["s"]
-            }
-        }
-        
-        return payload
-    
-    def build_ioc_order(
-        self,
-        market: str,
-        side: str,
-        size: float,
-        price: float,
-        fee: float,
-        reduce_only: bool = False,
-        client_id: str = None
-    ) -> dict:
-        """
-        Build a signed IOC (Immediate-Or-Cancel) order for risk-off.
-        
-        Returns:
-            dict ready to be sent to the API
-        """
-        expiration = get_expiration(300)  # Short expiration for IOC
-        client_id = client_id or generate_client_id("ioc")
-        
-        order_data = OrderData(
-            market=market,
-            side=side.upper(),
-            order_type="LIMIT",
-            size=f"{size:.8f}",
-            price=f"{price:.8f}",
-            time_in_force="IOC",
-            fee=f"{fee:.8f}",
-            expiration=expiration,
-            nonce=generate_nonce(),
-            client_id=client_id,
-            reduce_only=reduce_only,
-            post_only=False
-        )
-        
-        signature = self.signer.sign_order(order_data, self.vault_id)
-        
-        payload = {
-            "market": order_data.market,
-            "side": order_data.side,
-            "type": order_data.order_type,
-            "size": order_data.size,
-            "price": order_data.price,
-            "timeInForce": order_data.time_in_force,
-            "fee": order_data.fee,
-            "expiration": order_data.expiration,
-            "clientId": order_data.client_id,
-            "reduceOnly": order_data.reduce_only,
-            "postOnly": False,
-            "signature": {
-                "r": signature["r"],
-                "s": signature["s"]
-            }
-        }
-        
-        return payload

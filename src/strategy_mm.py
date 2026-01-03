@@ -69,17 +69,25 @@ class MarketMakingStrategy:
     
     async def initialize(self, market_info: dict):
         """Initialize strategy with market information."""
-        # Parse market info
-        self._tick_size = float(market_info.get("tickSize", market_info.get("tick_size", 0.0001)))
-        self._min_order_size = float(market_info.get("minOrderSize", market_info.get("min_order_size", 0.001)))
-        
-        # Calculate precisions
-        self._price_precision = self._get_precision(self._tick_size)
-        self._size_precision = self._get_precision(self._min_order_size)
-        
+        # Parse market info from Extended API
+        # tradingConfig contains minOrderSize, minOrderSizeChange, minPriceChange
+        trading_config = market_info.get("tradingConfig", {})
+
+        # Get min order size from tradingConfig (e.g., "0.1" for AAVE)
+        self._min_order_size = float(trading_config.get("minOrderSize", "0.1"))
+
+        # Get tick sizes from tradingConfig
+        min_size_change = float(trading_config.get("minOrderSizeChange", "0.01"))
+        min_price_change = float(trading_config.get("minPriceChange", "0.01"))
+
+        self._tick_size = min_price_change
+        self._price_precision = self._get_precision(min_price_change)
+        self._size_precision = self._get_precision(min_size_change)
+
         logger.info(
             f"Strategy initialized: tick_size={self._tick_size}, "
-            f"min_size={self._min_order_size}"
+            f"min_size={self._min_order_size}, "
+            f"price_precision={self._price_precision}, size_precision={self._size_precision}"
         )
     
     def calculate_quotes(
@@ -277,10 +285,15 @@ class MarketMakingStrategy:
         # Check if we can place orders
         can_bid, bid_reason = self.risk_manager.can_place_order("BUY", quote_params.bid_price * quote_params.bid_size)
         can_ask, ask_reason = self.risk_manager.can_place_order("SELL", quote_params.ask_price * quote_params.ask_size)
-        
+
+        if not can_bid:
+            logger.warning(f"BID blocked: {bid_reason}")
+        if not can_ask:
+            logger.warning(f"ASK blocked: {ask_reason}")
+
         # Place quotes
         start_time = time.time()
-        
+
         quote_pair = await self.order_manager.place_quotes(
             bid_price=quote_params.bid_price if can_bid else 0,
             bid_size=quote_params.bid_size if can_bid else 0,
@@ -436,13 +449,17 @@ class StrategyRunner:
         while self._running:
             try:
                 market_state = get_market_state()
-                
-                if market_state and market_state.ws_connected:
+
+                # Run if we have market state with valid mid price
+                # (either from WS or from REST fallback)
+                if market_state and market_state.orderbook.mid_price:
                     await self.strategy.update_quotes(market_state)
-                
+                elif market_state:
+                    logger.debug("No mid price available, waiting for market data...")
+
                 # Sleep for a fraction of refresh interval
                 await asyncio.sleep(0.5)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

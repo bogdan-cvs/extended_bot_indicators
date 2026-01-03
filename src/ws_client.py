@@ -262,14 +262,14 @@ class ExtendedWSClient:
     
     async def _connect(self):
         """Establish WebSocket connection."""
-        extra_headers = {
+        additional_headers = {
             "User-Agent": "ExtendedMMBot/1.0",
             "X-Api-Key": self.config.api_key
         }
         
         self._ws = await websockets.connect(
             self.ws_url,
-            extra_headers=extra_headers,
+            additional_headers=additional_headers,
             ping_interval=20,
             ping_timeout=10
         )
