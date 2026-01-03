@@ -1,0 +1,117 @@
+# =============================================================================
+# MAINNET_SAFE Profile
+# =============================================================================
+# Profil ultra-conservator pentru primele rulări pe mainnet.
+# Pornește cu dry_run: true pentru validare, apoi setează false.
+# =============================================================================
+
+# Mod de operare
+dry_run: true  # OBLIGATORIU true la prima rulare! Schimbă în false după validare.
+log_level: "INFO"
+metrics_interval_sec: 60  # Rapoarte la fiecare minut
+
+# ===== STRATEGY PARAMETERS =====
+strategy:
+  # Market - ETH-USDC este cel mai lichid de obicei
+  market: "ETH-USDC"
+
+  # Dimensiunea ordinelor (USD)
+  # Ordine mici pentru început
+  order_notional_usd: 10.0
+
+  # Număr maxim de ordine per parte
+  # 1 singur ordine pe fiecare parte (bid/ask)
+  max_open_orders_per_side: 1
+
+  # Spread (în basis points, 1 bps = 0.01%)
+  # Spread moderat: 15-120 bps
+  spread_min_bps: 15.0      # Minim 0.15%
+  spread_max_bps: 120.0     # Maxim 1.20%
+
+  # Refresh interval
+  refresh_sec: 5.0
+
+  # Requote pe mișcare mid price
+  # Requote dacă mid se mișcă > 10 bps
+  mid_move_requote_bps: 10.0
+
+  # Pauză la volatilitate
+  # Intră în pauză dacă mid se mișcă > 50 bps în 15 secunde
+  pause_move_bps: 50.0
+  pause_window_sec: 15.0
+  cooldown_after_pause_sec: 40.0
+
+  # Ajustare spread pe volatilitate
+  volatility_lookback_sec: 60.0
+  volatility_spread_multiplier: 2.5
+
+# ===== RISK PARAMETERS =====
+risk:
+  # Limite de inventar (USD)
+  max_inventory_usd: 50.0           # Max $50 expunere
+  max_position_notional: 75.0       # Max $75 poziție notional
+  max_leverage: 1.0                 # Fără leverage!
+
+  # Kill switch - oprește botul
+  # La $15 drawdown, oprește tot
+  kill_switch_drawdown_usd: 15.0
+  session_drawdown_pct: 10.0        # Sau 10% din balanță
+  daily_drawdown_limit_usd: 20.0    # Limită zilnică $20
+
+  # Tracking fills negative
+  # Dacă 3+ fills negative în ultimele 5, reduce agresivitatea
+  max_negative_fills_window: 5
+  negative_fills_pause_threshold: 3
+
+  # Inventory skew
+  # Cât de mult să ajustăm quotes pe baza inventory
+  inventory_skew_factor: 0.6
+
+  # Stop-loss se setează din .env (STOP_LOSS_PCT)
+  # Recomandat: 5.0 pentru început
+
+# ===== ORDER EXECUTION =====
+order:
+  # POST_ONLY - esențial pentru market making
+  # Asigură că suntem mereu maker
+  post_only: true
+
+  # Risk-off cu taker orders
+  use_taker_for_risk_off: true
+  taker_offset_bps: 15.0
+
+  # Expirare ordine (secunde)
+  order_expiration_sec: 3600  # 1 oră
+
+  # Cancel before replace
+  cancel_before_replace: true
+
+  # Retry pe erori
+  max_retries: 3
+  retry_delay_sec: 1.0
+
+# =============================================================================
+# CHECKLIST PENTRU MAINNET
+# =============================================================================
+# 1. Actualizează .env cu credențialele pentru mainnet:
+#    - EXTENDED_API_KEY (cheia pentru mainnet)
+#    - EXTENDED_STARK_PRIVATE_KEY (cheia privată pentru mainnet)
+#    - EXTENDED_ACCOUNT_ADDRESS (adresa contului mainnet)
+#    - EXTENDED_VAULT_ID (dacă folosești vault-uri)
+#    - STOP_LOSS_PCT=5.0 (recomandat)
+#
+# 2. Schimbă BOT_ENV=mainnet în .env
+#
+# 3. Testează mai întâi cu dry_run: true:
+#    python -m src.main --env mainnet --profile MAINNET_SAFE
+#
+# 4. Verifică că:
+#    - Conectarea la API funcționează
+#    - Market info se încarcă corect
+#    - Balance-ul este citit corect
+#    - Calculul ordinelor arată bine
+#
+# 5. După validare, setează dry_run: false în acest fișier
+#
+# 6. Monitorizează activ primele 30-60 minute
+# =============================================================================
