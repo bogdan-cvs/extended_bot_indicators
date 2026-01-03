@@ -344,7 +344,12 @@ class MarketMakingBot:
 
                 # Update risk state from exchange
                 await self._sync_state()
-                
+
+                # Check stop-loss
+                should_stop_loss, stop_loss_params = self.risk_manager.check_stop_loss()
+                if should_stop_loss:
+                    await self._execute_stop_loss(stop_loss_params)
+
                 # Check kill switch
                 should_kill, kill_reason = self.risk_manager.check_kill_switch()
                 if should_kill:
@@ -414,7 +419,73 @@ class MarketMakingBot:
         
         # Sync orders
         await self.order_manager.sync_open_orders()
-    
+
+    async def _execute_stop_loss(self, params: dict):
+        """
+        Execute stop-loss by placing an aggressive IOC order to close position.
+
+        Args:
+            params: {"side": str, "size": float, "market": str, "loss_pct": float}
+        """
+        from decimal import Decimal
+
+        side = params["side"]
+        size = Decimal(str(params["size"]))
+        market = params["market"]
+        loss_pct = params.get("loss_pct", 0)
+
+        logger.warning(f"EXECUTING STOP-LOSS: {side} {size} {market} (loss: {loss_pct:.2f}%)")
+
+        # Cancel all open orders first
+        await self.order_manager.cancel_all_orders()
+
+        # Get current mark price for aggressive pricing
+        position = self.risk_manager.state.position
+        mark_price = position.mark_price
+
+        if mark_price <= 0:
+            # Fallback to API
+            market_response = await self.api_client.get_market(market)
+            if market_response.success and market_response.data:
+                data = market_response.data
+                if isinstance(data, dict) and "data" in data:
+                    markets = data["data"]
+                    if markets:
+                        stats = markets[0].get("marketStats", {})
+                        mark_price = float(stats.get("markPrice", 0))
+
+        if mark_price <= 0:
+            logger.error("Cannot execute stop-loss: no mark price available")
+            return
+
+        # Set aggressive price (5% worse than mark to ensure fill)
+        if side == "BUY":
+            aggressive_price = Decimal(str(mark_price)) * Decimal("1.05")
+        else:
+            aggressive_price = Decimal(str(mark_price)) * Decimal("0.95")
+
+        # Round to 2 decimals
+        aggressive_price = Decimal(str(round(float(aggressive_price), 2)))
+
+        logger.info(f"Stop-loss order: {side} {size} @ {aggressive_price} (mark: {mark_price})")
+
+        # Build IOC order to close position
+        order_payload = self.order_manager.order_builder.build_ioc_order(
+            market=market,
+            side=side,
+            size=size,
+            price=aggressive_price,
+            reduce_only=True,
+        )
+
+        # Place order
+        response = await self.api_client.create_order(order_payload)
+
+        if response.success:
+            logger.warning(f"Stop-loss order placed successfully: {response.data}")
+        else:
+            logger.error(f"Stop-loss order failed: {response.error}")
+
     def _update_metrics(self):
         """Update all metrics."""
         market = self.config.strategy.market

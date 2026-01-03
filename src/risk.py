@@ -242,7 +242,53 @@ class RiskManager:
             return True, KillReason.ERROR_LIMIT
         
         return False, None
-    
+
+    def check_stop_loss(self) -> tuple[bool, dict]:
+        """
+        Check if stop-loss should be triggered.
+
+        Returns:
+            (should_stop_loss, close_order_params)
+            close_order_params: {"side": "BUY"/"SELL", "size": float, "market": str}
+        """
+        # Stop-loss disabled
+        if self.risk_config.stop_loss_pct <= 0:
+            return False, {}
+
+        position = self.state.position
+        if position.size == 0:
+            return False, {}
+
+        # Calculate loss percentage based on unrealized PnL vs position notional
+        position_notional = abs(position.size * position.entry_price)
+        if position_notional == 0:
+            return False, {}
+
+        # Unrealized PnL is negative when losing
+        unrealized_pnl = position.unrealized_pnl
+        loss_pct = (-unrealized_pnl / position_notional) * 100 if unrealized_pnl < 0 else 0
+
+        if loss_pct >= self.risk_config.stop_loss_pct:
+            # Need to close position
+            # If LONG (size > 0), close with SELL
+            # If SHORT (size < 0), close with BUY
+            close_side = "SELL" if position.size > 0 else "BUY"
+            close_size = abs(position.size)
+
+            logger.warning(
+                f"STOP-LOSS TRIGGERED: Loss {loss_pct:.2f}% >= {self.risk_config.stop_loss_pct:.1f}%. "
+                f"Closing {close_side} {close_size} {position.market}"
+            )
+
+            return True, {
+                "side": close_side,
+                "size": close_size,
+                "market": position.market,
+                "loss_pct": loss_pct,
+            }
+
+        return False, {}
+
     def activate_kill_switch(self, reason: KillReason):
         """Activate the kill switch."""
         self.state.state = BotState.KILLED

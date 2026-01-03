@@ -65,6 +65,7 @@ class RiskConfig:
     max_negative_fills_window: int = 5
     negative_fills_pause_threshold: int = 3
     inventory_skew_factor: float = 0.5
+    stop_loss_pct: float = 0.0  # 0 = disabled, e.g. 5.0 = close at 5% loss
 
 
 @dataclass
@@ -107,12 +108,13 @@ class BotConfig:
 def load_env_credentials() -> dict:
     """Load API credentials from environment variables."""
     load_dotenv()
-    
+
     return {
         "api_key": os.getenv("EXTENDED_API_KEY", ""),
         "stark_private_key": os.getenv("EXTENDED_STARK_PRIVATE_KEY", ""),
         "account_address": os.getenv("EXTENDED_ACCOUNT_ADDRESS", ""),
         "vault_id": os.getenv("EXTENDED_VAULT_ID", ""),
+        "stop_loss_pct": float(os.getenv("STOP_LOSS_PCT", "0")),
     }
 
 
@@ -179,23 +181,29 @@ def create_config(
         if k in StrategyConfig.__dataclass_fields__
     })
     
-    # Build risk config
+    # Load credentials from environment (includes stop_loss_pct)
+    credentials = load_env_credentials()
+
+    # Build risk config - merge YAML config with env override for stop_loss_pct
     risk_dict = config_dict.get('risk', {})
+    # Override stop_loss_pct from env if set
+    if credentials.get('stop_loss_pct', 0) > 0:
+        risk_dict['stop_loss_pct'] = credentials['stop_loss_pct']
     risk = RiskConfig(**{
-        k: v for k, v in risk_dict.items() 
+        k: v for k, v in risk_dict.items()
         if k in RiskConfig.__dataclass_fields__
     })
-    
+
     # Build order config
     order_dict = config_dict.get('order', {})
     order = OrderConfig(**{
-        k: v for k, v in order_dict.items() 
+        k: v for k, v in order_dict.items()
         if k in OrderConfig.__dataclass_fields__
     })
-    
-    # Load credentials from environment
-    credentials = load_env_credentials()
-    
+
+    # Remove stop_loss_pct from credentials (it's in risk config now)
+    credentials.pop('stop_loss_pct', None)
+
     # Create final config
     config = BotConfig(
         environment=environment,
@@ -208,7 +216,7 @@ def create_config(
         order=order,
         **credentials
     )
-    
+
     return config
 
 
@@ -265,6 +273,10 @@ def print_config_summary(config: BotConfig):
     print(f"  Max Position:  ${config.risk.max_position_notional:.2f}")
     print(f"  Kill Switch:   ${config.risk.kill_switch_drawdown_usd:.2f} drawdown")
     print(f"  Max Leverage:  {config.risk.max_leverage}x")
+    if config.risk.stop_loss_pct > 0:
+        print(f"  Stop-Loss:     {config.risk.stop_loss_pct:.1f}%")
+    else:
+        print(f"  Stop-Loss:     Disabled")
     print("-"*60)
     print("ORDER EXECUTION:")
     print(f"  Post Only:     {config.order.post_only}")
