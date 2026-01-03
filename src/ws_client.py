@@ -490,7 +490,7 @@ async def test_ws_connection(config: BotConfig, market: str, timeout: float = 10
         start = time.time()
         while time.time() - start < timeout:
             if received_data["orderbook"]:
-                logger.info("✓ WebSocket orderbook streaming OK")
+                logger.info("[OK] WebSocket orderbook streaming OK")
                 return True
             await asyncio.sleep(0.5)
         

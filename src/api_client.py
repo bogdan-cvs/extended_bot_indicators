@@ -376,20 +376,20 @@ async def test_api_connection(config: BotConfig) -> bool:
         if not markets.success:
             logger.error(f"Failed to get markets: {markets.error}")
             return False
-        logger.info(f"✓ Markets endpoint OK. Found {len(markets.data) if markets.data else 0} markets")
+        logger.info(f"[OK] Markets endpoint OK. Found {len(markets.data) if markets.data else 0} markets")
         
         # Test authenticated endpoint
         balance = await client.get_balance()
         if not balance.success:
             logger.error(f"Failed to get balance: {balance.error}")
             return False
-        logger.info("✓ Balance endpoint OK")
+        logger.info("[OK] Balance endpoint OK")
         
         # Test fees endpoint
         market = config.strategy.market
         fees = await client.get_fees(market)
         if fees.success:
-            logger.info(f"✓ Fees endpoint OK. Data: {fees.data}")
+            logger.info(f"[OK] Fees endpoint OK. Data: {fees.data}")
         else:
             logger.warning(f"Fees endpoint returned error: {fees.error}")
         

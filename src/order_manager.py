@@ -103,10 +103,11 @@ class OrderManager:
     ):
         self.config = config
         self.api = api_client
+        from .config import Environment
         self.order_builder = create_order_builder(
             private_key=private_key,
-            vault=config.vault_id,
-            is_testnet=True  # TODO: make configurable
+            vault=int(config.vault_id) if config.vault_id else 0,
+            is_testnet=(config.environment == Environment.TESTNET)
         )
         
         # Order tracking

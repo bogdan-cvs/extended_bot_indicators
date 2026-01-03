@@ -12,12 +12,13 @@ metrics_interval_sec: 60  # Rapoarte la fiecare minut
 
 # ===== STRATEGY PARAMETERS =====
 strategy:
-  # Market - ETH-USDC este cel mai lichid de obicei
-  market: "ETH-USDC"
+  # Market - ETH-USD este cel mai lichid pe mainnet
+  # Alte opțiuni: BTC-USD, SUI-USD, SOL-USD
+  market: "ETH-USD"
 
   # Dimensiunea ordinelor (USD)
-  # Ordine mici pentru început
-  order_notional_usd: 10.0
+  # ETH-USD are minOrderSize=0.01 ETH (~$31), deci minim $35
+  order_notional_usd: 35.0
 
   # Număr maxim de ordine per parte
   # 1 singur ordine pe fiecare parte (bid/ask)
@@ -48,9 +49,9 @@ strategy:
 # ===== RISK PARAMETERS =====
 risk:
   # Limite de inventar (USD)
-  max_inventory_usd: 50.0           # Max $50 expunere
-  max_position_notional: 75.0       # Max $75 poziție notional
-  max_leverage: 1.0                 # Fără leverage!
+  max_inventory_usd: 70.0           # Max = order_notional * 2
+  max_position_notional: 140.0      # Max = max_inventory * leverage (70 * 2)
+  max_leverage: 2.0                 # Leverage conservator
 
   # Kill switch - oprește botul
   # La $15 drawdown, oprește tot

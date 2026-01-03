@@ -187,7 +187,7 @@ class MarketMakingBot:
         try:
             market_info = await self.api_client.get_market_info(market)
             await self.strategy.initialize(market_info)
-            logger.info(f"✓ Market info: {market_info}")
+            logger.info(f"[OK] Market info: {market_info}")
 
             # Update L2 config for signing if available
             if "l2Config" in market_info:
@@ -204,7 +204,7 @@ class MarketMakingBot:
         balance_response = await self.api_client.get_balance()
         if balance_response.success:
             balance_data = balance_response.data
-            logger.info(f"✓ Balance: {balance_data}")
+            logger.info(f"[OK] Balance: {balance_data}")
             
             # Initialize risk manager with balance
             # Try to extract USD balance
@@ -234,7 +234,7 @@ class MarketMakingBot:
             if not ws_ok:
                 logger.warning("WebSocket test did not receive data (may be normal if market is quiet)")
         
-        logger.info("✓ Pre-flight checks completed")
+        logger.info("[OK] Pre-flight checks completed")
         return True
     
     def _setup_signal_handlers(self):
