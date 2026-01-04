@@ -261,32 +261,44 @@ class ExtendedWSClient:
                     break
     
     async def _connect(self):
-        """Establish WebSocket connection."""
-        additional_headers = {
+        """Establish WebSocket connection to orderbook stream."""
+        extra_headers = {
             "User-Agent": "ExtendedMMBot/1.0",
             "X-Api-Key": self.config.api_key
         }
-        
+
+        # Extended Exchange uses per-stream URLs, not subscribe messages
+        # Get the first orderbook subscription market
+        market = None
+        for sub in self._subscriptions:
+            if sub.startswith("orderbook:"):
+                market = sub.split(":", 1)[1]
+                break
+
+        if not market:
+            logger.warning("No orderbook subscription, cannot connect WebSocket")
+            return
+
+        # Build the orderbook stream URL
+        # Format: wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks/{market}
+        ws_url = f"{self.ws_url}/orderbooks/{market}"
+        logger.info(f"Connecting to WebSocket: {ws_url}")
+
         self._ws = await websockets.connect(
-            self.ws_url,
-            additional_headers=additional_headers,
+            ws_url,
+            extra_headers=extra_headers,
             ping_interval=20,
             ping_timeout=10
         )
-        
+
         self._connected = True
         self._reconnect_count = 0
         logger.info("WebSocket connected")
-        
+
         # Update market state
         for state in self.market_state.values():
             state.ws_connected = True
-        
-        # Resubscribe to all channels
-        for sub in self._subscriptions:
-            channel, market = sub.split(":", 1)
-            await self._send_subscribe(channel, market)
-        
+
         if self._on_connect:
             try:
                 self._on_connect()
@@ -310,8 +322,13 @@ class ExtendedWSClient:
     async def _handle_message(self, data: dict):
         """Handle parsed WebSocket message."""
         msg_type = data.get("type", data.get("channel", ""))
-        
-        if msg_type == "orderbook" or msg_type == "orderbook_snapshot":
+
+        # Extended Exchange format: type=SNAPSHOT or DELTA, data contains m, b, a
+        if msg_type == "SNAPSHOT":
+            await self._handle_extended_orderbook_snapshot(data)
+        elif msg_type == "DELTA":
+            await self._handle_extended_orderbook_delta(data)
+        elif msg_type == "orderbook" or msg_type == "orderbook_snapshot":
             await self._handle_orderbook(data)
         elif msg_type == "orderbook_update":
             await self._handle_orderbook_update(data)
@@ -359,7 +376,120 @@ class ExtendedWSClient:
                 self._on_orderbook(orderbook)
             except Exception as e:
                 logger.error(f"Orderbook callback error: {e}")
-    
+
+    async def _handle_extended_orderbook_snapshot(self, data: dict):
+        """Handle Extended Exchange orderbook SNAPSHOT message."""
+        inner = data.get("data", {})
+        market = inner.get("m", "")
+        if not market or market not in self.market_state:
+            # Try to find from subscriptions
+            for sub in self._subscriptions:
+                if sub.startswith("orderbook:"):
+                    market = sub.split(":", 1)[1]
+                    break
+
+        if not market or market not in self.market_state:
+            return
+
+        # Parse bids: [{q: size, p: price}, ...]
+        bids = []
+        for level in inner.get("b", []):
+            price = float(level.get("p", 0))
+            size = float(level.get("q", 0))
+            if price > 0 and size > 0:
+                bids.append(OrderBookLevel(price=price, size=size))
+
+        # Parse asks: [{q: size, p: price}, ...]
+        asks = []
+        for level in inner.get("a", []):
+            price = float(level.get("p", 0))
+            size = float(level.get("q", 0))
+            if price > 0 and size > 0:
+                asks.append(OrderBookLevel(price=price, size=size))
+
+        # Sort: bids descending, asks ascending
+        bids.sort(key=lambda x: x.price, reverse=True)
+        asks.sort(key=lambda x: x.price)
+
+        orderbook = OrderBook(
+            market=market,
+            bids=bids,
+            asks=asks,
+            timestamp=data.get("ts", time.time() * 1000) / 1000,
+            sequence=data.get("seq", 0)
+        )
+
+        self.market_state[market].orderbook = orderbook
+        self.market_state[market].last_update = time.time()
+
+        if self._on_orderbook:
+            try:
+                self._on_orderbook(orderbook)
+            except Exception as e:
+                logger.error(f"Orderbook callback error: {e}")
+
+    async def _handle_extended_orderbook_delta(self, data: dict):
+        """Handle Extended Exchange orderbook DELTA message."""
+        inner = data.get("data", {})
+        market = inner.get("m", "")
+        if not market:
+            # Try to find from subscriptions
+            for sub in self._subscriptions:
+                if sub.startswith("orderbook:"):
+                    market = sub.split(":", 1)[1]
+                    break
+
+        if not market or market not in self.market_state:
+            return
+
+        state = self.market_state[market]
+
+        # Update bids: delta q can be negative (reduce) or positive (add)
+        for level in inner.get("b", []):
+            price = float(level.get("p", 0))
+            delta_size = float(level.get("q", 0))
+            self._update_extended_book_side(state.orderbook.bids, price, delta_size, reverse=True)
+
+        # Update asks
+        for level in inner.get("a", []):
+            price = float(level.get("p", 0))
+            delta_size = float(level.get("q", 0))
+            self._update_extended_book_side(state.orderbook.asks, price, delta_size, reverse=False)
+
+        state.orderbook.timestamp = data.get("ts", time.time() * 1000) / 1000
+        state.orderbook.sequence = data.get("seq", state.orderbook.sequence + 1)
+        state.last_update = time.time()
+
+        if self._on_orderbook:
+            try:
+                self._on_orderbook(state.orderbook)
+            except Exception as e:
+                logger.error(f"Orderbook callback error: {e}")
+
+    def _update_extended_book_side(
+        self,
+        levels: list[OrderBookLevel],
+        price: float,
+        delta_size: float,
+        reverse: bool
+    ):
+        """Update a side of the order book with delta size."""
+        # Find existing level
+        for i, level in enumerate(levels):
+            if abs(level.price - price) < 0.0001:  # Float comparison
+                new_size = level.size + delta_size
+                if new_size <= 0:
+                    levels.pop(i)
+                else:
+                    level.size = new_size
+                return
+
+        # New level (only add if positive delta)
+        if delta_size > 0:
+            levels.append(OrderBookLevel(price=price, size=delta_size))
+            # Re-sort
+            levels.sort(key=lambda x: x.price, reverse=reverse)
+
     async def _handle_orderbook_update(self, data: dict):
         """Handle incremental order book update."""
         market = data.get("market", "")
