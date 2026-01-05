@@ -6,7 +6,7 @@
 # =============================================================================
 
 # Mod de operare
-dry_run: true  # OBLIGATORIU true la prima rulare! Schimbă în false după validare.
+dry_run: true  # Setează false pentru LIVE MODE
 log_level: "INFO"
 metrics_interval_sec: 60  # Rapoarte la fiecare minut
 
@@ -29,8 +29,8 @@ strategy:
   spread_min_bps: 15.0      # Minim 0.15%
   spread_max_bps: 120.0     # Maxim 1.20%
 
-  # Refresh interval
-  refresh_sec: 5.0
+  # Refresh interval (cât timp stau ordinele în piață)
+  refresh_sec: 30.0
 
   # Requote pe mișcare mid price
   # Requote dacă mid se mișcă > 10 bps

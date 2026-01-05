@@ -354,50 +354,50 @@ class MetricsCollector:
     def _print_summary(self, metrics: BotMetrics):
         """Print human-readable metrics summary."""
         print("\n" + "="*60)
-        print(f"📊 METRICS REPORT - {datetime.now().strftime('%H:%M:%S')}")
+        print(f"[METRICS] REPORT - {datetime.now().strftime('%H:%M:%S')}")
         print("="*60)
-        
+
         # State
-        state_emoji = "🟢" if metrics.state == "running" else "🟡" if metrics.state == "paused" else "🔴"
-        print(f"{state_emoji} State: {metrics.state.upper()} | Market: {metrics.market}")
-        
+        state_icon = "[ON]" if metrics.state == "running" else "[PAUSE]" if metrics.state == "paused" else "[OFF]"
+        print(f"{state_icon} State: {metrics.state.upper()} | Market: {metrics.market}")
+
         # PnL
-        pnl_emoji = "📈" if metrics.pnl.total_pnl >= 0 else "📉"
-        print(f"\n{pnl_emoji} PnL:")
+        pnl_icon = "[+]" if metrics.pnl.total_pnl >= 0 else "[-]"
+        print(f"\n{pnl_icon} PnL:")
         print(f"   Realized:   ${metrics.pnl.realized_pnl:+.4f}")
         print(f"   Unrealized: ${metrics.pnl.unrealized_pnl:+.4f}")
         print(f"   Total:      ${metrics.pnl.total_pnl:+.4f}")
         print(f"   Fees:       ${metrics.pnl.fees_paid:.4f}")
         print(f"   Drawdown:   ${metrics.pnl.current_drawdown:.4f} (max: ${metrics.pnl.max_drawdown:.4f})")
-        
+
         # Inventory
-        print(f"\n📦 Inventory:")
+        print(f"\n[INV] Inventory:")
         print(f"   Position:   {metrics.inventory.position_size:+.6f}")
         print(f"   Notional:   ${metrics.inventory.position_notional:.2f}")
         print(f"   Inventory:  ${metrics.inventory.inventory_usd:.2f} ({metrics.inventory.inventory_pct:.1f}%)")
         print(f"   Skew:       {metrics.inventory.skew_factor:+.3f}")
-        
+
         # Market
-        print(f"\n📊 Market:")
+        print(f"\n[MKT] Market:")
         print(f"   Mid Price:  ${metrics.market_data.mid_price:.4f}")
         print(f"   Spread:     {metrics.market_data.spread_bps:.2f} bps")
         print(f"   Volatility: {metrics.market_data.volatility_bps:.2f} bps")
         
         # Strategy
-        print(f"\n⚡ Strategy:")
+        print(f"\n[STR] Strategy:")
         print(f"   Quotes:     {metrics.strategy.quotes_placed} placed, {metrics.strategy.quotes_cancelled} cancelled")
         print(f"   Fills:      {metrics.strategy.fills_count} (maker: {metrics.strategy.maker_fills})")
         print(f"   Requotes:   {metrics.strategy.requotes_mid_move} (mid), {metrics.strategy.requotes_refresh} (refresh)")
         print(f"   Pauses:     {metrics.strategy.pauses_triggered}")
-        
+
         # System
-        ws_emoji = "🟢" if metrics.system.ws_connected else "🔴"
-        print(f"\n{ws_emoji} System:")
+        ws_icon = "[WS:ON]" if metrics.system.ws_connected else "[WS:OFF]"
+        print(f"\n{ws_icon} System:")
         print(f"   WS Messages: {metrics.system.ws_messages}")
         print(f"   API Requests: {metrics.system.api_requests}")
         print(f"   Errors: {metrics.system.api_errors}")
         print(f"   Uptime: {metrics.strategy.uptime_sec/60:.1f} min")
-        
+
         print("="*60 + "\n")
     
     def get_pnl_summary(self) -> dict:
