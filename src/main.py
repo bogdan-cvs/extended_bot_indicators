@@ -199,20 +199,42 @@ class MarketMakingBot:
             if not self.config.dry_run:
                 return False
         
-        # 3. Check balance
+        # 3. Check balance and set dynamic risk limits
         logger.info("Checking account balance...")
         balance_response = await self.api_client.get_balance()
         if balance_response.success:
             balance_data = balance_response.data
             logger.info(f"[OK] Balance: {balance_data}")
-            
-            # Initialize risk manager with balance
-            # Try to extract USD balance
+
+            # Extract USD balance from API response
+            # API returns: {"status": "OK", "data": {"balance": "54.29", ...}}
             if isinstance(balance_data, dict):
-                usd_balance = float(balance_data.get("USD", balance_data.get("USDC", balance_data.get("total", 0))))
+                # Handle nested response structure
+                inner_data = balance_data.get("data", balance_data)
+                if isinstance(inner_data, dict):
+                    usd_balance = float(inner_data.get("balance",
+                                       inner_data.get("equity",
+                                       inner_data.get("USD",
+                                       inner_data.get("USDC",
+                                       inner_data.get("total", 0))))))
+                else:
+                    usd_balance = float(balance_data.get("balance", 0))
             else:
                 usd_balance = 100  # Default for dry run
-            
+
+            # Update risk limits based on actual balance
+            # max_inventory = balance (use full balance as max inventory)
+            # max_position_notional = balance * leverage
+            old_inventory = self.config.risk.max_inventory_usd
+            old_notional = self.config.risk.max_position_notional
+
+            self.config.risk.max_inventory_usd = usd_balance
+            self.config.risk.max_position_notional = usd_balance * self.config.risk.max_leverage
+
+            logger.info(f"[DYNAMIC] Updated risk limits from balance ${usd_balance:.2f}:")
+            logger.info(f"  max_inventory_usd: ${old_inventory:.2f} -> ${self.config.risk.max_inventory_usd:.2f}")
+            logger.info(f"  max_position_notional: ${old_notional:.2f} -> ${self.config.risk.max_position_notional:.2f}")
+
             self.risk_manager.initialize(usd_balance)
         else:
             logger.warning(f"Could not fetch balance: {balance_response.error}")
