@@ -6,7 +6,7 @@
 # =============================================================================
 
 # Mod de operare
-dry_run: true  # Setează false pentru LIVE MODE
+dry_run: false  # LIVE MODE
 log_level: "INFO"
 metrics_interval_sec: 60  # Rapoarte la fiecare minut
 
@@ -17,24 +17,24 @@ strategy:
   market: "ETH-USD"
 
   # Dimensiunea ordinelor (USD)
-  # ETH-USD are minOrderSize=0.01 ETH (~$31), deci minim $35
-  order_notional_usd: 35.0
+  # La 10x leverage: $150 notional = $15 margin din $152 balance
+  order_notional_usd: 150.0
 
   # Număr maxim de ordine per parte
-  # 1 singur ordine pe fiecare parte (bid/ask)
+  # 1 ordin pe fiecare parte pentru început
   max_open_orders_per_side: 1
 
   # Spread (în basis points, 1 bps = 0.01%)
-  # Spread moderat: 15-120 bps
-  spread_min_bps: 15.0      # Minim 0.15%
-  spread_max_bps: 120.0     # Maxim 1.20%
+  # Spread dublat pentru mai puțină expunere
+  spread_min_bps: 12.0      # Minim 0.12% (~$3.80)
+  spread_max_bps: 50.0      # Maxim 0.50%
 
   # Refresh interval (cât timp stau ordinele în piață)
   refresh_sec: 30.0
 
   # Requote pe mișcare mid price
-  # Requote dacă mid se mișcă > 10 bps
-  mid_move_requote_bps: 10.0
+  # Requote dacă mid se mișcă > 5 bps
+  mid_move_requote_bps: 5.0
 
   # Pauză la volatilitate
   # Intră în pauză dacă mid se mișcă > 50 bps în 15 secunde
@@ -48,10 +48,10 @@ strategy:
 
 # ===== RISK PARAMETERS =====
 risk:
-  # Limite de inventar (USD)
-  max_inventory_usd: 70.0           # Max = order_notional * 2
-  max_position_notional: 140.0      # Max = max_inventory * leverage (70 * 2)
-  max_leverage: 2.0                 # Leverage conservator
+  # Limite de inventar (USD) - vor fi actualizate dinamic din balance
+  max_inventory_usd: 1000.0         # Setat mare, va fi suprascris din balance
+  max_position_notional: 5000.0     # Setat mare, va fi suprascris din balance * leverage
+  max_leverage: 20.0                # Leverage 20x
 
   # Kill switch - oprește botul
   # La $15 drawdown, oprește tot

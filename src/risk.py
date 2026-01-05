@@ -289,6 +289,52 @@ class RiskManager:
 
         return False, {}
 
+    def check_take_profit(self) -> tuple[bool, dict]:
+        """
+        Check if take-profit should be triggered.
+
+        Returns:
+            (should_take_profit, close_order_params)
+            close_order_params: {"side": "BUY"/"SELL", "size": float, "market": str}
+        """
+        # Take-profit disabled
+        if self.risk_config.take_profit_pct <= 0:
+            return False, {}
+
+        position = self.state.position
+        if position.size == 0:
+            return False, {}
+
+        # Calculate profit percentage based on unrealized PnL vs position notional
+        position_notional = abs(position.size * position.entry_price)
+        if position_notional == 0:
+            return False, {}
+
+        # Unrealized PnL is positive when profitable
+        unrealized_pnl = position.unrealized_pnl
+        profit_pct = (unrealized_pnl / position_notional) * 100 if unrealized_pnl > 0 else 0
+
+        if profit_pct >= self.risk_config.take_profit_pct:
+            # Need to close position to lock in profit
+            # If LONG (size > 0), close with SELL
+            # If SHORT (size < 0), close with BUY
+            close_side = "SELL" if position.size > 0 else "BUY"
+            close_size = abs(position.size)
+
+            logger.warning(
+                f"TAKE-PROFIT TRIGGERED: Profit {profit_pct:.2f}% >= {self.risk_config.take_profit_pct:.1f}%. "
+                f"Closing {close_side} {close_size} {position.market}"
+            )
+
+            return True, {
+                "side": close_side,
+                "size": close_size,
+                "market": position.market,
+                "profit_pct": profit_pct,
+            }
+
+        return False, {}
+
     def activate_kill_switch(self, reason: KillReason):
         """Activate the kill switch."""
         self.state.state = BotState.KILLED
@@ -448,11 +494,14 @@ class RiskManager:
         if is_reducing:
             return True, ""
 
-        # Only block orders that would increase position beyond limits
-        if new_inv > self.risk_config.max_inventory_usd:
-            return False, f"Would exceed max inventory: ${new_inv:.2f} > ${self.risk_config.max_inventory_usd:.2f}"
+        # DON'T add to a losing position
+        # If we have unrealized loss and this order would INCREASE the position, block it
+        if self.state.unrealized_pnl < 0 and position_size != 0:
+            # We're in a losing position, don't add to it
+            return False, f"Won't add to losing position (unrealized PnL: ${self.state.unrealized_pnl:.2f})"
 
-        # Check position notional
+        # Only block orders that would increase position beyond max_position_notional
+        # (which is balance * leverage, allowing leveraged positions)
         if new_inv > self.risk_config.max_position_notional:
             return False, f"Would exceed max position: ${new_inv:.2f} > ${self.risk_config.max_position_notional:.2f}"
 

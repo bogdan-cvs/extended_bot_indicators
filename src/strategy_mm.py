@@ -131,10 +131,25 @@ class MarketMakingStrategy:
         # Round to tick size
         bid_price = self._round_to_tick(bid_price, down=True)
         ask_price = self._round_to_tick(ask_price, down=False)
-        
+
         # Ensure spread is positive after rounding
         if bid_price >= ask_price:
             ask_price = bid_price + self._tick_size
+
+        # POST_ONLY protection: ensure our prices don't cross the book
+        # BID must be < best_ask, ASK must be > best_bid
+        best_bid = orderbook.best_bid
+        best_ask = orderbook.best_ask
+
+        if best_ask and bid_price >= best_ask:
+            # Our bid would take liquidity, adjust down
+            bid_price = self._round_to_tick(best_ask - self._tick_size, down=True)
+            logger.debug(f"Adjusted BID down to {bid_price} (was crossing best_ask {best_ask})")
+
+        if best_bid and ask_price <= best_bid:
+            # Our ask would take liquidity, adjust up
+            ask_price = self._round_to_tick(best_bid + self._tick_size, down=False)
+            logger.debug(f"Adjusted ASK up to {ask_price} (was crossing best_bid {best_bid})")
         
         # Calculate sizes
         notional = self.strategy_config.order_notional_usd

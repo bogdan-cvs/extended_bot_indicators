@@ -325,24 +325,30 @@ class OrderManager:
     
     async def cancel_all_quotes(self, market: str = None) -> int:
         """Cancel all open quotes for a market."""
+        import asyncio
         market = market or self.config.strategy.market
-        
+
         response = await self.api.cancel_all_orders(market)
-        
+
         if response.success:
             # Update internal state
             for order in self._orders.values():
                 if order.market == market and order.is_active:
                     order.status = OrderStatus.CANCELLED
                     order.updated_at = time.time()
-            
+
             # Clear current quotes
             if market in self._current_quotes:
                 self._current_quotes[market] = QuotePair()
-            
+
             cancelled = response.data.get("cancelled", 0) if response.data else 0
             self._orders_cancelled += cancelled
             logger.info(f"Cancelled all orders for {market}: {cancelled}")
+
+            # Wait for cancellations to propagate (Extended API is async)
+            if cancelled > 0 or len([o for o in self._orders.values() if o.is_active]) > 0:
+                await asyncio.sleep(0.5)
+
             return cancelled
         else:
             logger.error(f"Failed to cancel all orders: {response.error}")

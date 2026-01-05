@@ -49,7 +49,8 @@ class MarketMakingBot:
         self.config = config
         self._running = False
         self._shutdown_event = asyncio.Event()
-        
+        self._last_fill_id = None  # Track last processed fill ID
+
         # Components (initialized in start())
         self.api_client: ExtendedAPIClient = None
         self.ws_client: ExtendedWSClient = None
@@ -372,6 +373,11 @@ class MarketMakingBot:
                 if should_stop_loss:
                     await self._execute_stop_loss(stop_loss_params)
 
+                # Check take-profit
+                should_take_profit, take_profit_params = self.risk_manager.check_take_profit()
+                if should_take_profit:
+                    await self._execute_take_profit(take_profit_params)
+
                 # Check kill switch
                 should_kill, kill_reason = self.risk_manager.check_kill_switch()
                 if should_kill:
@@ -421,12 +427,14 @@ class MarketMakingBot:
                     break
 
             if pos_data:
+                # Debug: log raw position data once to see field names
+                logger.info(f"Raw position fields: {list(pos_data.keys())}")
                 position = Position(
                     market=market,
                     size=float(pos_data.get("size", 0)),
-                    entry_price=float(pos_data.get("entryPrice", pos_data.get("entry_price", 0))),
+                    entry_price=float(pos_data.get("entryPrice", pos_data.get("avgEntryPrice", pos_data.get("entry_price", 0)))),
                     mark_price=float(pos_data.get("markPrice", pos_data.get("mark_price", 0))),
-                    unrealized_pnl=float(pos_data.get("unrealizedPnl", pos_data.get("unrealized_pnl", 0)))
+                    unrealized_pnl=float(pos_data.get("unrealizedPnl", pos_data.get("pnl", pos_data.get("unrealized_pnl", 0))))
                 )
                 # Handle side - SHORT position has negative size
                 side = pos_data.get("side", "LONG")
@@ -434,13 +442,71 @@ class MarketMakingBot:
                     position.size = -abs(position.size)
                 position.notional_usd = abs(position.size * position.mark_price)
                 self.risk_manager.update_position(position)
-                logger.debug(f"Position synced: {side} {abs(position.size)} @ {position.entry_price}")
+                # Log position details for debugging stop-loss
+                logger.info(f"Position: {side} {abs(position.size):.4f} @ entry ${position.entry_price:.2f}, mark ${position.mark_price:.2f}, uPnL ${position.unrealized_pnl:.2f}")
             else:
                 # No position - reset to zero
                 self.risk_manager.update_position(Position(market=market, size=0, entry_price=0, mark_price=0, unrealized_pnl=0))
-        
+
         # Sync orders
         await self.order_manager.sync_open_orders()
+
+        # Sync fills - check for new fills and process them
+        await self._sync_fills(market)
+
+    async def _sync_fills(self, market: str):
+        """Check for new fills and process them."""
+        try:
+            fills_response = await self.api_client.get_fills(market, limit=20)
+            if not fills_response.success or not fills_response.data:
+                return
+
+            raw_data = fills_response.data
+            fills = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
+
+            if not fills:
+                return
+
+            # Process fills in chronological order (oldest first)
+            fills = sorted(fills, key=lambda f: f.get("id", 0))
+
+            for fill in fills:
+                fill_id = fill.get("id")
+                if fill_id is None:
+                    continue
+
+                # Skip already processed fills
+                if self._last_fill_id is not None and fill_id <= self._last_fill_id:
+                    continue
+
+                # Process this fill
+                side = fill.get("side", "").upper()
+                size = float(fill.get("size", fill.get("amount", 0)))
+                price = float(fill.get("price", 0))
+                fee = float(fill.get("fee", 0))
+                is_maker = fill.get("isMaker", fill.get("maker", True))
+
+                logger.info(
+                    f"[FILL] {side} {size:.6f} ETH @ ${price:.2f} "
+                    f"(fee: ${fee:.4f}, maker: {is_maker})"
+                )
+
+                # Record fill in strategy
+                await self.strategy_runner.strategy.handle_fill({
+                    "orderId": fill.get("orderId", ""),
+                    "market": market,
+                    "side": side,
+                    "size": size,
+                    "price": price,
+                    "fee": fee,
+                    "isMaker": is_maker,
+                    "timestamp": fill.get("createdAt", fill.get("timestamp", 0))
+                })
+
+                self._last_fill_id = fill_id
+
+        except Exception as e:
+            logger.debug(f"Error syncing fills: {e}")
 
     async def _execute_stop_loss(self, params: dict):
         """
@@ -507,6 +573,72 @@ class MarketMakingBot:
             logger.warning(f"Stop-loss order placed successfully: {response.data}")
         else:
             logger.error(f"Stop-loss order failed: {response.error}")
+
+    async def _execute_take_profit(self, params: dict):
+        """
+        Execute take-profit by placing an aggressive IOC order to close position.
+
+        Args:
+            params: {"side": str, "size": float, "market": str, "profit_pct": float}
+        """
+        from decimal import Decimal
+
+        side = params["side"]
+        size = Decimal(str(params["size"]))
+        market = params["market"]
+        profit_pct = params.get("profit_pct", 0)
+
+        logger.warning(f"EXECUTING TAKE-PROFIT: {side} {size} {market} (profit: {profit_pct:.2f}%)")
+
+        # Cancel all open orders first
+        await self.order_manager.cancel_all_orders()
+
+        # Get current mark price for aggressive pricing
+        position = self.risk_manager.state.position
+        mark_price = position.mark_price
+
+        if mark_price <= 0:
+            # Fallback to API
+            market_response = await self.api_client.get_market(market)
+            if market_response.success and market_response.data:
+                data = market_response.data
+                if isinstance(data, dict) and "data" in data:
+                    markets = data["data"]
+                    if markets:
+                        stats = markets[0].get("marketStats", {})
+                        mark_price = float(stats.get("markPrice", 0))
+
+        if mark_price <= 0:
+            logger.error("Cannot execute take-profit: no mark price available")
+            return
+
+        # Set aggressive price (2% worse than mark to ensure fill, but not as aggressive as stop-loss)
+        if side == "BUY":
+            aggressive_price = Decimal(str(mark_price)) * Decimal("1.02")
+        else:
+            aggressive_price = Decimal(str(mark_price)) * Decimal("0.98")
+
+        # Round to 2 decimals
+        aggressive_price = Decimal(str(round(float(aggressive_price), 2)))
+
+        logger.info(f"Take-profit order: {side} {size} @ {aggressive_price} (mark: {mark_price})")
+
+        # Build IOC order to close position
+        order_payload = self.order_manager.order_builder.build_ioc_order(
+            market=market,
+            side=side,
+            size=size,
+            price=aggressive_price,
+            reduce_only=True,
+        )
+
+        # Place order
+        response = await self.api_client.create_order(order_payload)
+
+        if response.success:
+            logger.warning(f"Take-profit order placed successfully: {response.data}")
+        else:
+            logger.error(f"Take-profit order failed: {response.error}")
 
     def _update_metrics(self):
         """Update all metrics."""

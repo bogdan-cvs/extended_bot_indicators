@@ -66,6 +66,7 @@ class RiskConfig:
     negative_fills_pause_threshold: int = 3
     inventory_skew_factor: float = 0.5
     stop_loss_pct: float = 0.0  # 0 = disabled, e.g. 5.0 = close at 5% loss
+    take_profit_pct: float = 0.0  # 0 = disabled, e.g. 5.0 = close at 5% profit
 
 
 @dataclass
@@ -115,6 +116,7 @@ def load_env_credentials() -> dict:
         "account_address": os.getenv("EXTENDED_ACCOUNT_ADDRESS", ""),
         "vault_id": os.getenv("EXTENDED_VAULT_ID", ""),
         "stop_loss_pct": float(os.getenv("STOP_LOSS_PCT", "0")),
+        "take_profit_pct": float(os.getenv("TAKE_PROFIT_PCT", "0")),
     }
 
 
@@ -184,11 +186,14 @@ def create_config(
     # Load credentials from environment (includes stop_loss_pct)
     credentials = load_env_credentials()
 
-    # Build risk config - merge YAML config with env override for stop_loss_pct
+    # Build risk config - merge YAML config with env override for stop_loss_pct and take_profit_pct
     risk_dict = config_dict.get('risk', {})
     # Override stop_loss_pct from env if set
     if credentials.get('stop_loss_pct', 0) > 0:
         risk_dict['stop_loss_pct'] = credentials['stop_loss_pct']
+    # Override take_profit_pct from env if set
+    if credentials.get('take_profit_pct', 0) > 0:
+        risk_dict['take_profit_pct'] = credentials['take_profit_pct']
     risk = RiskConfig(**{
         k: v for k, v in risk_dict.items()
         if k in RiskConfig.__dataclass_fields__
@@ -201,8 +206,9 @@ def create_config(
         if k in OrderConfig.__dataclass_fields__
     })
 
-    # Remove stop_loss_pct from credentials (it's in risk config now)
+    # Remove stop_loss_pct and take_profit_pct from credentials (they're in risk config now)
     credentials.pop('stop_loss_pct', None)
+    credentials.pop('take_profit_pct', None)
 
     # Create final config
     config = BotConfig(
@@ -277,6 +283,10 @@ def print_config_summary(config: BotConfig):
         print(f"  Stop-Loss:     {config.risk.stop_loss_pct:.1f}%")
     else:
         print(f"  Stop-Loss:     Disabled")
+    if config.risk.take_profit_pct > 0:
+        print(f"  Take-Profit:   {config.risk.take_profit_pct:.1f}%")
+    else:
+        print(f"  Take-Profit:   Disabled")
     print("-"*60)
     print("ORDER EXECUTION:")
     print(f"  Post Only:     {config.order.post_only}")
