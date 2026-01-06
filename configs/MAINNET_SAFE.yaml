@@ -26,11 +26,11 @@ strategy:
 
   # Spread (în basis points, 1 bps = 0.01%)
   # Spread dublat pentru mai puțină expunere
-  spread_min_bps: 12.0      # Minim 0.12% (~$3.80)
+  spread_min_bps: 8.0      # Minim 0.12% (~$3.80)
   spread_max_bps: 50.0      # Maxim 0.50%
 
   # Refresh interval (cât timp stau ordinele în piață)
-  refresh_sec: 30.0
+  refresh_sec: 60.0
 
   # Requote pe mișcare mid price
   # Requote dacă mid se mișcă > 5 bps
