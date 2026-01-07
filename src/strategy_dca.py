@@ -791,27 +791,50 @@ class DCAStrategy:
                 logger.warning(f"[DCA] Could not fetch fills for fees: {response.error}")
                 return 0.0
 
-            fills = response.data.get("data", []) if isinstance(response.data, dict) else response.data
+            # Handle different response formats
+            raw_data = response.data
+            if isinstance(raw_data, dict):
+                fills = raw_data.get("data", raw_data.get("trades", []))
+            elif isinstance(raw_data, list):
+                fills = raw_data
+            else:
+                fills = []
+
             if not fills:
+                logger.info(f"[DCA] No fills found. Response: {str(raw_data)[:200]}")
                 return 0.0
 
-            # Sum fees from fills within this trade's timeframe
+            # Log first fill to see structure
+            if fills:
+                logger.info(f"[DCA] Sample fill: {fills[0]}")
+
+            # Sum all fees from recent fills (simpler approach - sum all)
             total_fees = 0.0
             trade_start = trade.started_at
             trade_end = trade.closed_at or time.time()
 
             for fill in fills:
-                # Parse fill timestamp (could be in ms or seconds)
-                fill_time = float(fill.get("timestamp", fill.get("time", 0)))
+                # Try multiple timestamp field names
+                fill_time = 0
+                for ts_field in ["timestamp", "time", "createdAt", "created_at", "executedAt"]:
+                    if ts_field in fill:
+                        fill_time = float(fill[ts_field])
+                        break
+
                 if fill_time > 1e12:  # milliseconds
                     fill_time = fill_time / 1000
 
-                # Check if fill is within trade timeframe (with some buffer)
-                if trade_start - 60 <= fill_time <= trade_end + 60:
-                    # Extended Exchange uses "fee" or "payedFee"
-                    fee = float(fill.get("fee", fill.get("payedFee", fill.get("tradingFee", 0))))
+                # Check if fill is within trade timeframe (with buffer)
+                if fill_time == 0 or (trade_start - 120 <= fill_time <= trade_end + 120):
+                    # Try multiple fee field names
+                    fee = 0.0
+                    for fee_field in ["fee", "payedFee", "tradingFee", "commission", "feeAmount"]:
+                        if fee_field in fill and fill[fee_field]:
+                            fee = float(fill[fee_field])
+                            break
                     total_fees += abs(fee)
 
+            logger.debug(f"[DCA] Total fees calculated: ${total_fees:.4f} from {len(fills)} fills")
             return total_fees
 
         except Exception as e:
