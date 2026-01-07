@@ -154,6 +154,7 @@ class DCATrade:
     realized_pnl: float = 0.0
     closed_at: Optional[float] = None
     close_reason: str = ""
+    fees_paid: float = 0.0  # Trading fees for this trade
 
 
 class DCAStrategy:
@@ -185,7 +186,11 @@ class DCAStrategy:
         # Stats
         self._total_trades = 0
         self._winning_trades = 0
+        self._losing_trades = 0
         self._total_pnl = 0.0
+        self._total_fees = 0.0
+        self._total_wins_pnl = 0.0
+        self._total_losses_pnl = 0.0
 
         logger.info(
             f"DCA Strategy initialized: {config.direction.value} "
@@ -703,9 +708,12 @@ class DCAStrategy:
                 trade.closed_at = time.time()
                 trade.close_reason = "external_close"
 
+                # Fetch fees from recent fills
+                trade.fees_paid = await self._fetch_trade_fees(trade)
+
                 logger.info(
                     f"[DCA] Trade COMPLETED (position closed externally). "
-                    f"PnL: ${pnl:.2f} ({pnl/trade.total_cost*100:.2f}%)"
+                    f"PnL: ${pnl:.2f} ({pnl/trade.total_cost*100:.2f}%), Fees: ${trade.fees_paid:.2f}"
                 )
 
                 self._finalize_trade(trade)
@@ -734,6 +742,8 @@ class DCAStrategy:
             trade.state = DCATradeState.COMPLETED
             trade.closed_at = time.time()
             trade.close_reason = reason
+            # Fetch fees from recent fills
+            trade.fees_paid = await self._fetch_trade_fees(trade)
             self._finalize_trade(trade)
             return
 
@@ -764,10 +774,48 @@ class DCAStrategy:
             trade.closed_at = time.time()
             trade.close_reason = reason
 
-            logger.info(f"[DCA] Trade closed: {reason}, PnL: ${pnl:.2f}")
+            # Fetch fees from recent fills
+            trade.fees_paid = await self._fetch_trade_fees(trade)
+
+            logger.info(f"[DCA] Trade closed: {reason}, PnL: ${pnl:.2f}, Fees: ${trade.fees_paid:.2f}")
             self._finalize_trade(trade)
         else:
             logger.error(f"[DCA] Failed to close trade: {response.error}")
+
+    async def _fetch_trade_fees(self, trade: DCATrade) -> float:
+        """Fetch total fees paid for this trade from recent fills."""
+        try:
+            # Get recent fills for this market
+            response = await self.api.get_fills(market=trade.market, limit=50)
+            if not response.success:
+                logger.warning(f"[DCA] Could not fetch fills for fees: {response.error}")
+                return 0.0
+
+            fills = response.data.get("data", []) if isinstance(response.data, dict) else response.data
+            if not fills:
+                return 0.0
+
+            # Sum fees from fills within this trade's timeframe
+            total_fees = 0.0
+            trade_start = trade.started_at
+            trade_end = trade.closed_at or time.time()
+
+            for fill in fills:
+                # Parse fill timestamp (could be in ms or seconds)
+                fill_time = float(fill.get("timestamp", fill.get("time", 0)))
+                if fill_time > 1e12:  # milliseconds
+                    fill_time = fill_time / 1000
+
+                # Check if fill is within trade timeframe (with some buffer)
+                if trade_start - 60 <= fill_time <= trade_end + 60:
+                    fee = float(fill.get("fee", fill.get("tradingFee", 0)))
+                    total_fees += abs(fee)
+
+            return total_fees
+
+        except Exception as e:
+            logger.warning(f"[DCA] Error fetching fees: {e}")
+            return 0.0
 
     def _calculate_pnl(self, trade: DCATrade, exit_price: float) -> float:
         """Calculate PnL for trade."""
@@ -784,20 +832,37 @@ class DCAStrategy:
         self._trade_history.append(trade)
         self._total_trades += 1
         self._total_pnl += trade.realized_pnl
+        self._total_fees += trade.fees_paid
 
         if trade.realized_pnl > 0:
             self._winning_trades += 1
+            self._total_wins_pnl += trade.realized_pnl
+        else:
+            self._losing_trades += 1
+            self._total_losses_pnl += abs(trade.realized_pnl)
 
         self._last_trade_closed_at = time.time()
         self._current_trade = None
 
+        # Calculate stats
         win_rate = (self._winning_trades / self._total_trades * 100) if self._total_trades > 0 else 0
+        avg_win = (self._total_wins_pnl / self._winning_trades) if self._winning_trades > 0 else 0
+        avg_loss = (self._total_losses_pnl / self._losing_trades) if self._losing_trades > 0 else 0
+        net_pnl = self._total_pnl - self._total_fees
 
         logger.info(
-            f"[DCA] Stats: {self._total_trades} trades, "
-            f"{win_rate:.1f}% win rate, "
-            f"Total PnL: ${self._total_pnl:.2f}"
+            f"[STATS] Trades: {self._total_trades} | "
+            f"Win: {self._winning_trades} ({win_rate:.1f}%) | "
+            f"Loss: {self._losing_trades} | "
+            f"PnL: ${self._total_pnl:.2f} | "
+            f"Fees: ${self._total_fees:.2f} | "
+            f"Net: ${net_pnl:.2f}"
         )
+        if self._winning_trades > 0 or self._losing_trades > 0:
+            logger.info(
+                f"[STATS] Avg Win: ${avg_win:.2f} | "
+                f"Avg Loss: ${avg_loss:.2f}"
+            )
 
     async def cancel_all_orders(self) -> None:
         """Cancel all orders for current trade."""
