@@ -702,16 +702,19 @@ class DCAStrategy:
             # Check if position closed externally
             if abs(position_size) < self._min_order_size:
                 # Position was closed (externally or by exchange)
-                # Fetch fees and realized PnL from exchange fills (most accurate)
-                trade.fees_paid, exchange_realized_pnl = await self._fetch_trade_fees_and_pnl(trade)
+                # Fetch fees, realized PnL, and exit price from exchange fills
+                trade.fees_paid, exchange_realized_pnl, exit_price = await self._fetch_trade_fees_and_pnl(trade)
 
-                # Use exchange PnL if available, otherwise calculate from current price
+                # Use exchange PnL if available, otherwise calculate from exit price or current price
                 if exchange_realized_pnl is not None:
                     pnl = exchange_realized_pnl
                     logger.info(f"[DCA] Using exchange realized PnL: ${pnl:.4f}")
+                elif exit_price is not None:
+                    pnl = self._calculate_pnl(trade, exit_price)
+                    logger.info(f"[DCA] Using calculated PnL from exit price ${exit_price:.2f}: ${pnl:.4f}")
                 else:
                     pnl = self._calculate_pnl(trade, current_price)
-                    logger.info(f"[DCA] Using calculated PnL (no exchange data): ${pnl:.4f}")
+                    logger.info(f"[DCA] Using calculated PnL from current price ${current_price:.2f}: ${pnl:.4f}")
 
                 trade.realized_pnl = pnl
                 trade.state = DCATradeState.COMPLETED
@@ -778,12 +781,14 @@ class DCAStrategy:
             # Wait a moment for fill to be processed
             await asyncio.sleep(0.5)
 
-            # Fetch fees and realized PnL from exchange fills (most accurate)
-            trade.fees_paid, exchange_realized_pnl = await self._fetch_trade_fees_and_pnl(trade)
+            # Fetch fees, realized PnL, and exit price from exchange fills
+            trade.fees_paid, exchange_realized_pnl, exit_price = await self._fetch_trade_fees_and_pnl(trade)
 
-            # Use exchange PnL if available, otherwise calculate
+            # Use exchange PnL if available, otherwise calculate from exit price
             if exchange_realized_pnl is not None:
                 pnl = exchange_realized_pnl
+            elif exit_price is not None:
+                pnl = self._calculate_pnl(trade, exit_price)
             else:
                 pnl = self._calculate_pnl(trade, close_price)
 
@@ -797,19 +802,19 @@ class DCAStrategy:
         else:
             logger.error(f"[DCA] Failed to close trade: {response.error}")
 
-    async def _fetch_trade_fees_and_pnl(self, trade: DCATrade) -> tuple[float, float]:
+    async def _fetch_trade_fees_and_pnl(self, trade: DCATrade) -> tuple[float, float, float]:
         """
-        Fetch total fees and realized PnL for this trade from recent fills.
+        Fetch total fees, realized PnL, and exit price for this trade from recent fills.
 
         Returns:
-            Tuple of (fees, realized_pnl) from exchange fills
+            Tuple of (fees, realized_pnl, exit_price) from exchange fills
         """
         try:
             # Get recent fills for this market
             response = await self.api.get_fills(market=trade.market, limit=50)
             if not response.success:
                 logger.warning(f"[DCA] Could not fetch fills for fees: {response.error}")
-                return 0.0, None
+                return 0.0, None, None
 
             # Handle different response formats
             raw_data = response.data
@@ -822,7 +827,7 @@ class DCAStrategy:
 
             if not fills:
                 logger.info(f"[DCA] No fills found. Response: {str(raw_data)[:200]}")
-                return 0.0, None
+                return 0.0, None, None
 
             # Log first fill to see structure
             if fills:
@@ -832,12 +837,15 @@ class DCAStrategy:
             # Extended Exchange createdTime is not a real timestamp, so match by qty instead
             total_fees = 0.0
             total_pnl = 0.0
+            total_value = 0.0
+            total_qty = 0.0
             trade_qty = trade.total_size
             matched_fills = 0
             remaining_qty = trade_qty
 
             for fill in fills:
                 fill_qty = float(fill.get("qty", fill.get("size", fill.get("quantity", 0))))
+                fill_price = float(fill.get("price", fill.get("avgPrice", fill.get("fillPrice", 0))))
 
                 # Match fills that could be part of this trade
                 if fill_qty > 0 and remaining_qty > 0:
@@ -858,6 +866,8 @@ class DCAStrategy:
                     if fill_qty <= remaining_qty * 1.1:  # 10% tolerance
                         total_fees += abs(fee)
                         total_pnl += pnl
+                        total_value += fill_price * fill_qty
+                        total_qty += fill_qty
                         remaining_qty -= fill_qty
                         matched_fills += 1
 
@@ -865,16 +875,20 @@ class DCAStrategy:
                     if remaining_qty <= 0:
                         break
 
-            logger.info(f"[DCA] Fees: ${total_fees:.4f}, PnL from fills: ${total_pnl:.4f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
-            return total_fees, total_pnl if matched_fills > 0 else None
+            # Calculate average exit price
+            exit_price = total_value / total_qty if total_qty > 0 else None
+
+            logger.info(f"[DCA] Fees: ${total_fees:.4f}, PnL from fills: ${total_pnl:.4f}, Exit price: ${exit_price:.2f if exit_price else 0:.2f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
+            # Return PnL only if we found a non-zero value, otherwise return None to use fallback calculation
+            return total_fees, total_pnl if (matched_fills > 0 and abs(total_pnl) > 0.0001) else None, exit_price
 
         except Exception as e:
             logger.warning(f"[DCA] Error fetching fees: {e}")
-            return 0.0, None
+            return 0.0, None, None
 
     async def _fetch_trade_fees(self, trade: DCATrade) -> float:
         """Fetch total fees paid for this trade from recent fills."""
-        fees, _ = await self._fetch_trade_fees_and_pnl(trade)
+        fees, _, _ = await self._fetch_trade_fees_and_pnl(trade)
         return fees
 
     def _calculate_pnl(self, trade: DCATrade, exit_price: float) -> float:
