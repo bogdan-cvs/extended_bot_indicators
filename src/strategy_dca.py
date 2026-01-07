@@ -909,6 +909,7 @@ class DCAStrategy:
             "winning_trades": self._winning_trades,
             "win_rate": (self._winning_trades / self._total_trades * 100) if self._total_trades > 0 else 0,
             "total_pnl": self._total_pnl,
+            "total_fees": self._total_fees,
             "current_trade": {
                 "id": trade.id if trade else None,
                 "state": trade.state.value if trade else None,
