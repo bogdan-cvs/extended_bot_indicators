@@ -145,7 +145,7 @@ class ExtendedAPIClient:
                     # Check for errors
                     if response.status >= 400:
                         error_msg = data.get("error", str(data)) if isinstance(data, dict) else str(data)
-                        logger.error(f"API error {response.status}: {error_msg}")
+                        logger.error(f"API error {response.status} on {endpoint}: {error_msg}")
                         
                         if response.status >= 500 and attempt < max_retries - 1:
                             # Retry on server errors
@@ -223,10 +223,17 @@ class ExtendedAPIClient:
 
         Returns:
             APIResponse with candle data
-            Candle format: [timestamp, open, high, low, close, volume]
+            Candle format: {"t": timestamp, "o": open, "h": high, "l": low, "c": close, "v": volume}
         """
+        # Convert seconds to interval string
+        interval_map = {
+            60: "1m", 180: "3m", 300: "5m", 900: "15m",
+            1800: "30m", 3600: "1h", 14400: "4h", 86400: "1d"
+        }
+        interval = interval_map.get(timeframe, "15m")
+
         params = {
-            "resolution": timeframe,
+            "interval": interval,
             "limit": limit
         }
         if start_time:
@@ -346,8 +353,13 @@ class ExtendedAPIClient:
         """Send heartbeat to keep dead man's switch alive."""
         if self.config.dry_run:
             return APIResponse(success=True, data={"status": "ok"})
-        
-        return await self._request("POST", "/user/heartbeat")
+
+        # Heartbeat endpoint may not exist on all environments
+        response = await self._request("POST", "/user/heartbeat")
+        if response.status_code == 404:
+            # Endpoint not available, silently ignore
+            return APIResponse(success=True, data={"status": "not_available"})
+        return response
     
     # ==================== UTILITY METHODS ====================
     

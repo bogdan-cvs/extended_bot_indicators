@@ -24,6 +24,7 @@ class DCADirection(Enum):
     """DCA trade direction."""
     LONG = "LONG"    # Buy low, sell high
     SHORT = "SHORT"  # Sell high, buy low
+    AUTO = "AUTO"    # Determined by indicators
 
 
 def _extract_order_id(response_data: dict) -> Optional[str]:
@@ -714,10 +715,32 @@ class DCAStrategy:
         # Cancel all open orders
         await self.api.cancel_all_orders(trade.market)
 
+        # Get actual position size from exchange
+        actual_size = trade.total_size
+        try:
+            pos_response = await self.api.get_positions()
+            if pos_response.success and pos_response.data:
+                positions = pos_response.data.get("data", [])
+                for pos in positions:
+                    if pos.get("market") == trade.market:
+                        actual_size = abs(float(pos.get("size", 0)))
+                        break
+        except Exception as e:
+            logger.warning(f"[DCA] Could not fetch position size: {e}, using tracked size")
+
+        # If no position exists, skip closing
+        if actual_size < self._min_order_size:
+            logger.info(f"[DCA] No position to close (size: {actual_size:.4f})")
+            trade.state = DCATradeState.COMPLETED
+            trade.closed_at = time.time()
+            trade.close_reason = reason
+            self._finalize_trade(trade)
+            return
+
         # Place market order to close
         side = "SELL" if self.config.direction == DCADirection.LONG else "BUY"
 
-        logger.info(f"[DCA] Closing trade: {side} {trade.total_size:.4f} @ market")
+        logger.info(f"[DCA] Closing trade: {side} {actual_size:.4f} @ market (tracked: {trade.total_size:.4f})")
 
         # Calculate aggressive price (2% worse to ensure fill)
         raw_price = close_price * (1.02 if side == "BUY" else 0.98)
@@ -727,7 +750,7 @@ class DCAStrategy:
         order_payload = self.order_builder.build_ioc_order(
             market=trade.market,
             side=side,
-            size=Decimal(str(trade.total_size)),
+            size=Decimal(str(actual_size)),
             price=Decimal(str(rounded_price)),
             reduce_only=True,
         )

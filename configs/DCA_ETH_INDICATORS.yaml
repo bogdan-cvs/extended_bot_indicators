@@ -14,8 +14,8 @@ metrics_interval_sec: 60
 
 # ===== DCA STRATEGY PARAMETERS =====
 dca:
-  # Direction: LONG (buy dips) or SHORT (sell rallies)
-  direction: "LONG"
+  # Direction: LONG (buy dips), SHORT (sell rallies), or AUTO (follow indicators)
+  direction: "AUTO"
 
   # Market to trade
   market: "ETH-USD"
@@ -133,24 +133,29 @@ order:
 # =============================================================================
 # STRATEGY EXPLANATION:
 # =============================================================================
-# PERMISSIVE STRATEGY (2 out of 4 indicators must confirm):
+# AUTO DIRECTION with PERMISSIVE STRATEGY (2 out of 4 indicators must confirm):
 #
-# For LONG entry, need 2 of these:
+# The bot will enter LONG or SHORT based on indicator signals:
+#
+# LONG entry (2+ of these):
 #   - RSI < 35 (oversold)
 #   - MACD bullish (histogram > 0 or bullish crossover)
 #   - Price at/below lower Bollinger Band
 #   - Price above EMA200 (uptrend)
 #
-# For SHORT entry, need 2 of these:
+# SHORT entry (2+ of these):
 #   - RSI > 65 (overbought)
 #   - MACD bearish (histogram < 0 or bearish crossover)
 #   - Price at/above upper Bollinger Band
 #   - Price below EMA200 (downtrend)
 #
-# Benefits of permissive:
-#   - More trading opportunities (5-10 trades/day)
-#   - Win rate ~55-65%
-#   - Good for ranging/sideways markets
+# If 2 LONG and 2 SHORT = NEUTRAL (no entry)
+# If 3+ in one direction = enters that direction
+#
+# Benefits of AUTO + permissive:
+#   - Trades both directions (long and short)
+#   - More trading opportunities
+#   - Works in trending and ranging markets
 #
 # TP/SL: 2.5% / 2.5% = 1:1 Risk:Reward
 # Win rate needed: >50%

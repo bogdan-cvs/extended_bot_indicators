@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 import logging
 import yaml
+import aiohttp
 
 from .config import (
     BotConfig,
@@ -385,10 +386,15 @@ class DCABot:
                 else:
                     # Start new trade if conditions met
                     # First check indicators if enabled
-                    should_enter, entry_reason, signal_details = await self._check_indicator_signal(market)
+                    should_enter, entry_reason, signal_details, signal_direction = await self._check_indicator_signal(market)
 
                     if should_enter:
                         if self.dca_config.start_immediately or self._indicators_enabled:
+                            # In AUTO mode, update strategy direction based on signal
+                            if signal_direction is not None:
+                                self.dca_strategy.config.direction = signal_direction
+                                logger.info(f"[DCA] AUTO mode: Setting direction to {signal_direction.value}")
+
                             logger.info(f"[DCA] Entry signal: {entry_reason}")
                             logger.info(f"Starting new DCA trade at best_bid=${best_bid:.2f} (mid=${current_price:.2f})")
                             await self.dca_strategy.start_new_trade(current_price, best_bid)
@@ -576,42 +582,42 @@ class DCABot:
         Fetch historical candles for indicator calculation.
 
         Extended Exchange API: /api/v1/info/candles/{market}/trades
-        Returns candles with: timestamp, open, high, low, close, volume
         """
         try:
-            # Calculate time range
-            end_time = int(time.time() * 1000)  # Current time in ms
-            # Need enough history for EMA200 on chosen timeframe
-            start_time = end_time - (self._candles_count * self._candle_timeframe * 1000)
+            # Map timeframe in seconds to Extended Exchange interval
+            interval_map = {
+                60: "1m",
+                180: "3m",
+                300: "5m",
+                900: "15m",
+                1800: "30m",
+                3600: "1h",
+                14400: "4h",
+                86400: "1d",
+            }
+            interval = interval_map.get(self._candle_timeframe, "15m")
 
-            # Fetch candles from API
-            response = await self.api_client.get_candles(
-                market=market,
-                timeframe=self._candle_timeframe,
-                start_time=start_time,
-                end_time=end_time,
-                limit=self._candles_count
-            )
+            # Extended Exchange candles API
+            base_url = "https://api.starknet.extended.exchange/api/v1"
+            url = f"{base_url}/info/candles/{market}/trades?interval={interval}&limit={self._candles_count}"
 
-            if response.success and response.data:
-                data = response.data
-                candles = data.get("data", data) if isinstance(data, dict) else data
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        result = await response.json()
 
-                if isinstance(candles, list) and len(candles) > 0:
-                    # Extract closing prices (oldest to newest)
-                    # Candle format: [timestamp, open, high, low, close, volume]
-                    prices = []
-                    for candle in candles:
-                        if isinstance(candle, list) and len(candle) >= 5:
-                            prices.append(float(candle[4]))  # Close price
-                        elif isinstance(candle, dict):
-                            prices.append(float(candle.get("close", candle.get("c", 0))))
+                        if result.get("status") == "OK" and result.get("data"):
+                            candles = result["data"]
+                            # Extended Exchange format: {"o": open, "h": high, "l": low, "c": close, "v": volume, "T": timestamp}
+                            # Note: candles are sorted descending by timestamp, so we reverse
+                            prices = [float(candle["c"]) for candle in reversed(candles)]
 
-                    if prices:
-                        logger.debug(f"[INDICATORS] Fetched {len(prices)} candles, latest close: ${prices[-1]:.2f}")
-                        return prices
+                            if prices:
+                                logger.debug(f"[INDICATORS] Fetched {len(prices)} candles, latest close: ${prices[-1]:.2f}")
+                                return prices
+                    else:
+                        logger.warning(f"[INDICATORS] Extended Exchange API error: {response.status}")
 
-            logger.warning(f"[INDICATORS] Could not fetch candles: {response.error if not response.success else 'empty data'}")
             return []
 
         except Exception as e:
@@ -623,10 +629,11 @@ class DCABot:
         Check indicator signals for entry.
 
         Returns:
-            Tuple of (should_enter, reason, signal_details)
+            Tuple of (should_enter, reason, signal_details, signal_direction)
+            signal_direction is DCADirection.LONG or DCADirection.SHORT when AUTO mode
         """
         if not self._indicators_enabled:
-            return True, "Indicators disabled", None
+            return True, "Indicators disabled", None, None
 
         # Check if we need to update indicators
         now = time.time()
@@ -634,7 +641,7 @@ class DCABot:
             # Use cached signal
             if self._last_signal:
                 return self._last_signal
-            return False, "Waiting for first indicator check", None
+            return False, "Waiting for first indicator check", None, None
 
         self._last_indicator_check = now
 
@@ -642,7 +649,7 @@ class DCABot:
         prices = await self._fetch_candles(market)
         if len(prices) < 200:
             logger.warning(f"[INDICATORS] Not enough candles: {len(prices)} < 200 needed for EMA200")
-            return False, f"Not enough data ({len(prices)} candles)", None
+            return False, f"Not enough data ({len(prices)} candles)", None, None
 
         self._cached_prices = prices
 
@@ -667,6 +674,7 @@ class DCABot:
 
         # Get combined signal
         direction = self.dca_config.direction.value
+        is_auto_mode = direction == "AUTO"
         use_rsi = rsi_config.get("enabled", True)
         use_macd = macd_config.get("enabled", True)
         use_bb = bb_config.get("enabled", True)
@@ -681,9 +689,6 @@ class DCABot:
             min_confirmations=self._min_confirmations,
         )
 
-        # Check if signal matches our direction
-        target_signal = Signal.LONG if direction == "LONG" else Signal.SHORT
-
         # Log indicator values
         indicator_summary = []
         for ind in signal.indicators:
@@ -695,14 +700,34 @@ class DCABot:
             f"Final: {signal.final_signal.value} (confidence: {signal.confidence:.0%})"
         )
 
+        # AUTO mode: enter in the direction the indicators suggest
+        if is_auto_mode:
+            if signal.final_signal == Signal.LONG:
+                reason = f"{signal.long_count}/{len(signal.indicators)} indicators confirm LONG"
+                signal_direction = DCADirection.LONG
+                self._last_signal = (True, reason, signal, signal_direction)
+                return True, reason, signal, signal_direction
+            elif signal.final_signal == Signal.SHORT:
+                reason = f"{signal.short_count}/{len(signal.indicators)} indicators confirm SHORT"
+                signal_direction = DCADirection.SHORT
+                self._last_signal = (True, reason, signal, signal_direction)
+                return True, reason, signal, signal_direction
+            else:
+                reason = f"No clear signal ({signal.long_count}L/{signal.short_count}S)"
+                self._last_signal = (False, reason, signal, None)
+                return False, reason, signal, None
+
+        # Fixed direction mode: check if signal matches our direction
+        target_signal = Signal.LONG if direction == "LONG" else Signal.SHORT
+
         if signal.final_signal == target_signal:
             reason = f"{signal.long_count if direction == 'LONG' else signal.short_count}/{len(signal.indicators)} indicators confirm {direction}"
-            self._last_signal = (True, reason, signal)
-            return True, reason, signal
+            self._last_signal = (True, reason, signal, None)
+            return True, reason, signal, None
         else:
             reason = f"Signal is {signal.final_signal.value}, need {direction} ({signal.long_count}L/{signal.short_count}S)"
-            self._last_signal = (False, reason, signal)
-            return False, reason, signal
+            self._last_signal = (False, reason, signal, None)
+            return False, reason, signal, None
 
 
 def load_dca_config(profile_name: str) -> tuple:
@@ -716,9 +741,14 @@ def load_dca_config(profile_name: str) -> tuple:
     dca_dict = profile.get("dca", {})
     indicators_dict = profile.get("indicators", {})
 
-    # Parse direction
+    # Parse direction (LONG, SHORT, or AUTO)
     direction_str = dca_dict.get("direction", "LONG").upper()
-    direction = DCADirection.LONG if direction_str == "LONG" else DCADirection.SHORT
+    if direction_str == "AUTO":
+        direction = DCADirection.AUTO
+    elif direction_str == "SHORT":
+        direction = DCADirection.SHORT
+    else:
+        direction = DCADirection.LONG
 
     dca_config = DCAConfig(
         direction=direction,
