@@ -351,15 +351,9 @@ class ExtendedAPIClient:
     
     async def heartbeat(self) -> APIResponse:
         """Send heartbeat to keep dead man's switch alive."""
-        if self.config.dry_run:
-            return APIResponse(success=True, data={"status": "ok"})
-
-        # Heartbeat endpoint may not exist on all environments
-        response = await self._request("POST", "/user/heartbeat")
-        if response.status_code == 404:
-            # Endpoint not available, silently ignore
-            return APIResponse(success=True, data={"status": "not_available"})
-        return response
+        # Heartbeat endpoint not available on Extended Exchange mainnet
+        # Skip the call entirely to avoid 404 errors in logs
+        return APIResponse(success=True, data={"status": "not_available"})
     
     # ==================== UTILITY METHODS ====================
     
