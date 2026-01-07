@@ -109,7 +109,13 @@ class PnLMetrics:
     total_pnl: float = 0.0
     fees_paid: float = 0.0
     gross_pnl: float = 0.0
-    
+
+    # Trade stats
+    total_trades: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
+    win_rate: float = 0.0
+
     # Drawdown
     session_high_water: float = 0.0
     current_drawdown: float = 0.0
@@ -247,7 +253,10 @@ class MetricsCollector:
         self,
         realized: float,
         unrealized: float,
-        fees: float
+        fees: float,
+        total_trades: int = 0,
+        winning_trades: int = 0,
+        win_rate: float = 0.0
     ):
         """Update PnL metrics."""
         self.current.pnl.realized_pnl = realized
@@ -255,16 +264,22 @@ class MetricsCollector:
         self.current.pnl.total_pnl = realized + unrealized
         self.current.pnl.fees_paid = fees
         self.current.pnl.gross_pnl = realized + unrealized + fees
-        
+
+        # Trade stats
+        self.current.pnl.total_trades = total_trades
+        self.current.pnl.winning_trades = winning_trades
+        self.current.pnl.losing_trades = total_trades - winning_trades
+        self.current.pnl.win_rate = win_rate
+
         # Track high water mark and drawdown
         total = self.current.pnl.total_pnl
         if total > self.current.pnl.session_high_water:
             self.current.pnl.session_high_water = total
-        
+
         self.current.pnl.current_drawdown = self.current.pnl.session_high_water - total
         if self.current.pnl.current_drawdown > self.current.pnl.max_drawdown:
             self.current.pnl.max_drawdown = self.current.pnl.current_drawdown
-        
+
         # Record history
         self._pnl_history.append((time.time(), total))
         # Keep last hour
@@ -369,6 +384,7 @@ class MetricsCollector:
         print(f"   Total:      ${metrics.pnl.total_pnl:+.4f}")
         print(f"   Fees:       ${metrics.pnl.fees_paid:.4f}")
         print(f"   Drawdown:   ${metrics.pnl.current_drawdown:.4f} (max: ${metrics.pnl.max_drawdown:.4f})")
+        print(f"   Trades:     {metrics.pnl.total_trades} (W:{metrics.pnl.winning_trades} L:{metrics.pnl.losing_trades} | {metrics.pnl.win_rate:.1f}%)")
 
         # Inventory
         print(f"\n[INV] Inventory:")

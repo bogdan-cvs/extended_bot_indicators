@@ -574,7 +574,10 @@ class DCABot:
         self.metrics.update_pnl(
             realized=status["total_pnl"],
             unrealized=0,  # Would need to calculate from position
-            fees=status.get("total_fees", 0)
+            fees=status.get("total_fees", 0),
+            total_trades=status.get("total_trades", 0),
+            winning_trades=status.get("winning_trades", 0),
+            win_rate=status.get("win_rate", 0.0)
         )
 
     async def _fetch_candles(self, market: str) -> dict:
