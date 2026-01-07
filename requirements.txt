@@ -26,6 +26,10 @@ starknet-py>=0.20.0
 orjson>=3.9.0  # Fast JSON
 tenacity>=8.2.0  # Retry logic
 
+# Technical Indicators
+numpy>=2.0.0
+pandas>=2.0.0
+
 # CLI
 click>=8.1.0
 rich>=13.7.0  # Pretty console output

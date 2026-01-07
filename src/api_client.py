@@ -202,7 +202,41 @@ class ExtendedAPIClient:
     async def get_trades(self, market: str, limit: int = 50) -> APIResponse:
         """Get recent trades."""
         return await self._request("GET", f"/info/markets/{market}/trades", params={"limit": limit})
-    
+
+    async def get_candles(
+        self,
+        market: str,
+        timeframe: int = 900,
+        start_time: int = None,
+        end_time: int = None,
+        limit: int = 250
+    ) -> APIResponse:
+        """
+        Get historical candles for a market.
+
+        Args:
+            market: Market symbol (e.g., "ETH-USD")
+            timeframe: Candle timeframe in seconds (e.g., 900 for 15m)
+            start_time: Start timestamp in milliseconds
+            end_time: End timestamp in milliseconds
+            limit: Maximum number of candles to return
+
+        Returns:
+            APIResponse with candle data
+            Candle format: [timestamp, open, high, low, close, volume]
+        """
+        params = {
+            "resolution": timeframe,
+            "limit": limit
+        }
+        if start_time:
+            params["from"] = start_time
+        if end_time:
+            params["to"] = end_time
+
+        # Extended Exchange candles endpoint
+        return await self._request("GET", f"/info/candles/{market}/trades", params=params)
+
     async def get_ticker(self, market: str) -> APIResponse:
         """Get market ticker (price, 24h volume, etc.)."""
         return await self._request("GET", f"/info/markets/{market}/stats")
