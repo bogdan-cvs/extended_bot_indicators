@@ -130,6 +130,7 @@ class InventoryMetrics:
     inventory_usd: float = 0.0
     inventory_pct: float = 0.0
     skew_factor: float = 0.0
+    account_balance: float = 0.0  # Account balance in USD
 
 
 @dataclass
@@ -292,17 +293,19 @@ class MetricsCollector:
         position_notional: float,
         inventory_usd: float,
         max_inventory_usd: float,
-        skew_factor: float
+        skew_factor: float,
+        account_balance: float = 0.0
     ):
         """Update inventory metrics."""
         self.current.inventory.position_size = position_size
         self.current.inventory.position_notional = position_notional
         self.current.inventory.inventory_usd = inventory_usd
         self.current.inventory.inventory_pct = (
-            (inventory_usd / max_inventory_usd * 100) 
+            (inventory_usd / max_inventory_usd * 100)
             if max_inventory_usd > 0 else 0
         )
         self.current.inventory.skew_factor = skew_factor
+        self.current.inventory.account_balance = account_balance
     
     def update_market(
         self,
@@ -388,6 +391,7 @@ class MetricsCollector:
 
         # Inventory
         print(f"\n[INV] Inventory:")
+        print(f"   Balance:    ${metrics.inventory.account_balance:.2f}")
         print(f"   Position:   {metrics.inventory.position_size:+.6f}")
         print(f"   Notional:   ${metrics.inventory.position_notional:.2f}")
         print(f"   Inventory:  ${metrics.inventory.inventory_usd:.2f} ({metrics.inventory.inventory_pct:.1f}%)")

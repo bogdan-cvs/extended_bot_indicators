@@ -702,18 +702,25 @@ class DCAStrategy:
             # Check if position closed externally
             if abs(position_size) < self._min_order_size:
                 # Position was closed (externally or by exchange)
-                pnl = self._calculate_pnl(trade, current_price)
+                # Fetch fees and realized PnL from exchange fills (most accurate)
+                trade.fees_paid, exchange_realized_pnl = await self._fetch_trade_fees_and_pnl(trade)
+
+                # Use exchange PnL if available, otherwise calculate from current price
+                if exchange_realized_pnl is not None:
+                    pnl = exchange_realized_pnl
+                    logger.info(f"[DCA] Using exchange realized PnL: ${pnl:.4f}")
+                else:
+                    pnl = self._calculate_pnl(trade, current_price)
+                    logger.info(f"[DCA] Using calculated PnL (no exchange data): ${pnl:.4f}")
+
                 trade.realized_pnl = pnl
                 trade.state = DCATradeState.COMPLETED
                 trade.closed_at = time.time()
                 trade.close_reason = "external_close"
 
-                # Fetch fees from recent fills
-                trade.fees_paid = await self._fetch_trade_fees(trade)
-
                 logger.info(
                     f"[DCA] Trade COMPLETED (position closed externally). "
-                    f"PnL: ${pnl:.2f} ({pnl/trade.total_cost*100:.2f}%), Fees: ${trade.fees_paid:.2f}"
+                    f"PnL: ${pnl:.4f} ({pnl/trade.total_cost*100:.2f}%), Fees: ${trade.fees_paid:.4f}"
                 )
 
                 self._finalize_trade(trade)
@@ -768,28 +775,41 @@ class DCAStrategy:
         response = await self.api.create_order(order_payload)
 
         if response.success:
-            pnl = self._calculate_pnl(trade, close_price)
+            # Wait a moment for fill to be processed
+            await asyncio.sleep(0.5)
+
+            # Fetch fees and realized PnL from exchange fills (most accurate)
+            trade.fees_paid, exchange_realized_pnl = await self._fetch_trade_fees_and_pnl(trade)
+
+            # Use exchange PnL if available, otherwise calculate
+            if exchange_realized_pnl is not None:
+                pnl = exchange_realized_pnl
+            else:
+                pnl = self._calculate_pnl(trade, close_price)
+
             trade.realized_pnl = pnl
             trade.state = DCATradeState.STOPPED if reason == "stop_loss" else DCATradeState.COMPLETED
             trade.closed_at = time.time()
             trade.close_reason = reason
 
-            # Fetch fees from recent fills
-            trade.fees_paid = await self._fetch_trade_fees(trade)
-
-            logger.info(f"[DCA] Trade closed: {reason}, PnL: ${pnl:.2f}, Fees: ${trade.fees_paid:.2f}")
+            logger.info(f"[DCA] Trade closed: {reason}, PnL: ${pnl:.4f}, Fees: ${trade.fees_paid:.4f}")
             self._finalize_trade(trade)
         else:
             logger.error(f"[DCA] Failed to close trade: {response.error}")
 
-    async def _fetch_trade_fees(self, trade: DCATrade) -> float:
-        """Fetch total fees paid for this trade from recent fills."""
+    async def _fetch_trade_fees_and_pnl(self, trade: DCATrade) -> tuple[float, float]:
+        """
+        Fetch total fees and realized PnL for this trade from recent fills.
+
+        Returns:
+            Tuple of (fees, realized_pnl) from exchange fills
+        """
         try:
             # Get recent fills for this market
             response = await self.api.get_fills(market=trade.market, limit=50)
             if not response.success:
                 logger.warning(f"[DCA] Could not fetch fills for fees: {response.error}")
-                return 0.0
+                return 0.0, None
 
             # Handle different response formats
             raw_data = response.data
@@ -802,7 +822,7 @@ class DCAStrategy:
 
             if not fills:
                 logger.info(f"[DCA] No fills found. Response: {str(raw_data)[:200]}")
-                return 0.0
+                return 0.0, None
 
             # Log first fill to see structure
             if fills:
@@ -811,6 +831,7 @@ class DCAStrategy:
             # Match fills by quantity - sum fees for fills matching this trade's size
             # Extended Exchange createdTime is not a real timestamp, so match by qty instead
             total_fees = 0.0
+            total_pnl = 0.0
             trade_qty = trade.total_size
             matched_fills = 0
             remaining_qty = trade_qty
@@ -827,23 +848,34 @@ class DCAStrategy:
                             fee = float(fill[fee_field])
                             break
 
-                    if fee > 0:
-                        # Proportionally allocate fee if fill is larger than remaining
-                        if fill_qty <= remaining_qty * 1.1:  # 10% tolerance
-                            total_fees += abs(fee)
-                            remaining_qty -= fill_qty
-                            matched_fills += 1
-
-                        # Stop after matching enough quantity
-                        if remaining_qty <= 0:
+                    # Get realized PnL from fill
+                    pnl = 0.0
+                    for pnl_field in ["realizedPnl", "pnl", "realizedPNL", "realized_pnl"]:
+                        if pnl_field in fill and fill[pnl_field] is not None:
+                            pnl = float(fill[pnl_field])
                             break
 
-            logger.info(f"[DCA] Fees: ${total_fees:.4f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
-            return total_fees
+                    if fill_qty <= remaining_qty * 1.1:  # 10% tolerance
+                        total_fees += abs(fee)
+                        total_pnl += pnl
+                        remaining_qty -= fill_qty
+                        matched_fills += 1
+
+                    # Stop after matching enough quantity
+                    if remaining_qty <= 0:
+                        break
+
+            logger.info(f"[DCA] Fees: ${total_fees:.4f}, PnL from fills: ${total_pnl:.4f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
+            return total_fees, total_pnl if matched_fills > 0 else None
 
         except Exception as e:
             logger.warning(f"[DCA] Error fetching fees: {e}")
-            return 0.0
+            return 0.0, None
+
+    async def _fetch_trade_fees(self, trade: DCATrade) -> float:
+        """Fetch total fees paid for this trade from recent fills."""
+        fees, _ = await self._fetch_trade_fees_and_pnl(trade)
+        return fees
 
     def _calculate_pnl(self, trade: DCATrade, exit_price: float) -> float:
         """Calculate PnL for trade."""

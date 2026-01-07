@@ -79,6 +79,9 @@ class DCABot:
         self._cached_prices = []
         self._last_signal = None
 
+        # Account state
+        self._account_balance = 0.0
+
     async def start(self):
         """Initialize and start the bot."""
         logger.info("=" * 60)
@@ -298,6 +301,7 @@ class DCABot:
             self.config.risk.max_position_notional = usd_balance * self.config.risk.max_leverage
 
             logger.info(f"Balance: ${usd_balance:.2f}")
+            self._account_balance = usd_balance
             self.risk_manager.initialize(usd_balance)
 
             # Calculate total capital needed for DCA
@@ -426,11 +430,14 @@ class DCABot:
                     await self.stop(f"kill_switch:{kill_reason.value}")
                     break
 
-                # Update metrics
-                self._update_metrics()
+                # Update metrics with position info
+                position_notional = abs(position_size) * current_price if position_size else 0.0
+                self._update_metrics(position_size, position_notional)
 
                 # Periodic report
                 if self.metrics.should_report():
+                    # Refresh balance before report
+                    await self._refresh_balance()
                     self.metrics.report()
 
                 # Heartbeat
@@ -563,7 +570,22 @@ class DCABot:
             logger.error(f"Error syncing position: {e}")
             return 0.0, 0.0, 0.0, 0.0, 0.0
 
-    def _update_metrics(self):
+    async def _refresh_balance(self):
+        """Refresh account balance from exchange."""
+        try:
+            balance_response = await self.api_client.get_balance()
+            if balance_response.success:
+                balance_data = balance_response.data
+                if isinstance(balance_data, dict):
+                    inner_data = balance_data.get("data", balance_data)
+                    if isinstance(inner_data, dict):
+                        self._account_balance = float(inner_data.get("balance",
+                                                     inner_data.get("equity",
+                                                     inner_data.get("USD", self._account_balance))))
+        except Exception as e:
+            logger.debug(f"Error refreshing balance: {e}")
+
+    def _update_metrics(self, position_size: float = 0.0, position_notional: float = 0.0):
         """Update metrics from strategy status."""
         status = self.dca_strategy.get_status()
 
@@ -578,6 +600,16 @@ class DCABot:
             total_trades=status.get("total_trades", 0),
             winning_trades=status.get("winning_trades", 0),
             win_rate=status.get("win_rate", 0.0)
+        )
+
+        # Update inventory metrics with balance
+        self.metrics.update_inventory(
+            position_size=position_size,
+            position_notional=position_notional,
+            inventory_usd=abs(position_notional),
+            max_inventory_usd=self.config.risk.max_inventory_usd,
+            skew_factor=0.0,
+            account_balance=self._account_balance
         )
 
     async def _fetch_candles(self, market: str) -> dict:
