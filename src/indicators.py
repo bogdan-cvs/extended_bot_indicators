@@ -415,7 +415,9 @@ class TechnicalIndicators:
         low: List[float],
         close: List[float],
         min_strength: float = 20.0,
-        period: int = 14
+        period: int = 14,
+        signal_direction: str = None,
+        require_di_confirmation: bool = True
     ) -> Tuple[bool, float, str]:
         """
         Check if ADX indicates sufficient trend strength for trading.
@@ -426,6 +428,8 @@ class TechnicalIndicators:
             close: List of closing prices
             min_strength: Minimum ADX value to allow trading (default 20)
             period: ADX period (default 14)
+            signal_direction: "LONG" or "SHORT" - the signal we want to confirm
+            require_di_confirmation: If True, also check that DI confirms direction
 
         Returns:
             Tuple of (is_strong_enough, adx_value, description)
@@ -437,17 +441,36 @@ class TechnicalIndicators:
 
         adx, plus_di, minus_di = result
 
-        if adx >= min_strength:
-            if adx >= 50:
-                desc = f"ADX: {adx:.1f} (Very strong trend, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
-            elif adx >= 25:
-                desc = f"ADX: {adx:.1f} (Strong trend, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
-            else:
-                desc = f"ADX: {adx:.1f} (Trend forming, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
-            return (True, adx, desc)
-        else:
+        # Determine DI direction
+        di_bullish = plus_di > minus_di
+        di_direction = "BULLISH" if di_bullish else "BEARISH"
+
+        # Check ADX strength
+        if adx < min_strength:
             desc = f"ADX: {adx:.1f} < {min_strength} (Weak trend/ranging - FILTERED)"
             return (False, adx, desc)
+
+        # ADX is strong enough, now check DI confirmation if required
+        if require_di_confirmation and signal_direction:
+            signal_is_long = signal_direction == "LONG"
+            di_confirms = (signal_is_long and di_bullish) or (not signal_is_long and not di_bullish)
+
+            if not di_confirms:
+                desc = (f"ADX: {adx:.1f} OK but DI conflict: "
+                       f"Signal={signal_direction}, DI={di_direction} "
+                       f"(+DI:{plus_di:.1f}, -DI:{minus_di:.1f}) - FILTERED")
+                return (False, adx, desc)
+
+        # All checks passed
+        if adx >= 50:
+            strength = "Very strong"
+        elif adx >= 25:
+            strength = "Strong"
+        else:
+            strength = "Forming"
+
+        desc = f"ADX: {adx:.1f} ({strength} {di_direction} trend, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
+        return (True, adx, desc)
 
     # =========================================================================
     # EMA - Exponential Moving Average
@@ -585,8 +608,12 @@ class TechnicalIndicators:
         adx_info = None
         if use_adx_filter and final_signal != Signal.NEUTRAL:
             if high is not None and low is not None:
+                # Pass signal direction to check DI confirmation
+                signal_direction = final_signal.value  # "LONG" or "SHORT"
                 is_strong, adx_value, adx_desc = self.get_adx_filter(
-                    high, low, prices, adx_min_strength, adx_period
+                    high, low, prices, adx_min_strength, adx_period,
+                    signal_direction=signal_direction,
+                    require_di_confirmation=True
                 )
                 # Add ADX as an indicator result for logging
                 adx_info = IndicatorResult(
@@ -598,7 +625,7 @@ class TechnicalIndicators:
                 indicators.append(adx_info)
 
                 if not is_strong:
-                    # Weak trend - filter out the signal
+                    # Weak trend or DI conflict - filter out the signal
                     logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} -> NEUTRAL")
                     final_signal = Signal.NEUTRAL
                     confidence = 0.0
