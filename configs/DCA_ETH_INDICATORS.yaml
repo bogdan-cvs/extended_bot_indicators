@@ -109,6 +109,14 @@ indicators:
     enabled: true
     period: 200
 
+  # ===== ADX Filter Settings =====
+  # ADX measures trend STRENGTH (not direction)
+  # Used as a filter: if ADX < min_strength, no trades (ranging market)
+  adx:
+    enabled: true
+    period: 14
+    min_strength: 20.0  # ADX < 20 = weak trend, skip entry
+
 # ===== RISK PARAMETERS =====
 risk:
   max_inventory_usd: 1000.0

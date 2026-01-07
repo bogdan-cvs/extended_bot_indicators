@@ -310,6 +310,127 @@ class TechnicalIndicators:
         )
 
     # =========================================================================
+    # ADX - Average Directional Index
+    # =========================================================================
+    def calculate_adx(
+        self,
+        high: List[float],
+        low: List[float],
+        close: List[float],
+        period: int = 14
+    ) -> Optional[Tuple[float, float, float]]:
+        """
+        Calculate ADX (Average Directional Index).
+
+        ADX measures trend strength (not direction):
+        - ADX < 20: Weak/no trend (ranging market)
+        - ADX 20-25: Trend forming
+        - ADX 25-50: Strong trend
+        - ADX > 50: Very strong trend
+
+        Args:
+            high: List of high prices (oldest to newest)
+            low: List of low prices (oldest to newest)
+            close: List of closing prices (oldest to newest)
+            period: ADX period (default 14)
+
+        Returns:
+            Tuple of (adx, plus_di, minus_di) or None if not enough data
+        """
+        min_periods = period * 2 + 1
+        if len(high) < min_periods or len(low) < min_periods or len(close) < min_periods:
+            return None
+
+        high_arr = np.array(high)
+        low_arr = np.array(low)
+        close_arr = np.array(close)
+
+        # Step 1: Calculate True Range (TR)
+        tr1 = high_arr[1:] - low_arr[1:]  # High - Low
+        tr2 = np.abs(high_arr[1:] - close_arr[:-1])  # |High - PrevClose|
+        tr3 = np.abs(low_arr[1:] - close_arr[:-1])  # |Low - PrevClose|
+        tr = np.maximum(np.maximum(tr1, tr2), tr3)
+
+        # Step 2: Calculate Directional Movement (+DM, -DM)
+        up_move = high_arr[1:] - high_arr[:-1]
+        down_move = low_arr[:-1] - low_arr[1:]
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+
+        # Step 3: Wilder smoothing (similar to EMA but with different alpha)
+        def wilder_smooth(data: np.ndarray, period: int) -> np.ndarray:
+            """Wilder's smoothing method."""
+            smoothed = np.zeros_like(data, dtype=float)
+            # First value is sum of first 'period' values
+            smoothed[period - 1] = np.sum(data[:period])
+            for i in range(period, len(data)):
+                smoothed[i] = smoothed[i - 1] - (smoothed[i - 1] / period) + data[i]
+            return smoothed
+
+        atr = wilder_smooth(tr, period)
+        plus_dm_smooth = wilder_smooth(plus_dm, period)
+        minus_dm_smooth = wilder_smooth(minus_dm, period)
+
+        # Step 4: Calculate +DI and -DI
+        # Avoid division by zero
+        atr_safe = np.where(atr == 0, 1, atr)
+        plus_di = (plus_dm_smooth / atr_safe) * 100
+        minus_di = (minus_dm_smooth / atr_safe) * 100
+
+        # Step 5: Calculate DX
+        di_sum = plus_di + minus_di
+        di_sum_safe = np.where(di_sum == 0, 1, di_sum)
+        dx = (np.abs(plus_di - minus_di) / di_sum_safe) * 100
+
+        # Step 6: ADX = Wilder smoothed DX
+        adx = wilder_smooth(dx, period)
+
+        # Return last values (after sufficient warmup)
+        idx = -1
+        return (float(adx[idx]), float(plus_di[idx]), float(minus_di[idx]))
+
+    def get_adx_filter(
+        self,
+        high: List[float],
+        low: List[float],
+        close: List[float],
+        min_strength: float = 20.0,
+        period: int = 14
+    ) -> Tuple[bool, float, str]:
+        """
+        Check if ADX indicates sufficient trend strength for trading.
+
+        Args:
+            high: List of high prices
+            low: List of low prices
+            close: List of closing prices
+            min_strength: Minimum ADX value to allow trading (default 20)
+            period: ADX period (default 14)
+
+        Returns:
+            Tuple of (is_strong_enough, adx_value, description)
+        """
+        result = self.calculate_adx(high, low, close, period)
+
+        if result is None:
+            return (True, 0.0, "ADX: Not enough data (allowing trade)")
+
+        adx, plus_di, minus_di = result
+
+        if adx >= min_strength:
+            if adx >= 50:
+                desc = f"ADX: {adx:.1f} (Very strong trend, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
+            elif adx >= 25:
+                desc = f"ADX: {adx:.1f} (Strong trend, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
+            else:
+                desc = f"ADX: {adx:.1f} (Trend forming, +DI:{plus_di:.1f}, -DI:{minus_di:.1f})"
+            return (True, adx, desc)
+        else:
+            desc = f"ADX: {adx:.1f} < {min_strength} (Weak trend/ranging - FILTERED)"
+            return (False, adx, desc)
+
+    # =========================================================================
     # EMA - Exponential Moving Average
     # =========================================================================
     def calculate_ema(self, prices: List[float], period: Optional[int] = None) -> Optional[float]:
@@ -383,6 +504,12 @@ class TechnicalIndicators:
         use_bollinger: bool = True,
         use_ema: bool = True,
         min_confirmations: int = 2,
+        # ADX filter parameters
+        high: List[float] = None,
+        low: List[float] = None,
+        use_adx_filter: bool = False,
+        adx_min_strength: float = 20.0,
+        adx_period: int = 14,
     ) -> CombinedSignal:
         """
         Get combined signal from multiple indicators.
@@ -394,6 +521,11 @@ class TechnicalIndicators:
             use_bollinger: Include Bollinger Bands in analysis
             use_ema: Include EMA in analysis
             min_confirmations: Minimum indicators that must agree for a signal
+            high: List of high prices (required if use_adx_filter=True)
+            low: List of low prices (required if use_adx_filter=True)
+            use_adx_filter: Use ADX to filter out weak trends
+            adx_min_strength: Minimum ADX value (default 20)
+            adx_period: ADX calculation period (default 14)
 
         Returns:
             CombinedSignal with final decision
@@ -419,7 +551,7 @@ class TechnicalIndicators:
 
         total = len(indicators)
 
-        # Determine final signal
+        # Determine preliminary signal
         if long_count >= min_confirmations and long_count > short_count:
             final_signal = Signal.LONG
             confidence = long_count / total
@@ -429,6 +561,30 @@ class TechnicalIndicators:
         else:
             final_signal = Signal.NEUTRAL
             confidence = neutral_count / total if total > 0 else 0.0
+
+        # Apply ADX filter if enabled and we have a directional signal
+        adx_info = None
+        if use_adx_filter and final_signal != Signal.NEUTRAL:
+            if high is not None and low is not None:
+                is_strong, adx_value, adx_desc = self.get_adx_filter(
+                    high, low, prices, adx_min_strength, adx_period
+                )
+                # Add ADX as an indicator result for logging
+                adx_info = IndicatorResult(
+                    name="ADX",
+                    signal=Signal.NEUTRAL,  # ADX doesn't provide direction
+                    value=adx_value,
+                    details=adx_desc
+                )
+                indicators.append(adx_info)
+
+                if not is_strong:
+                    # Weak trend - filter out the signal
+                    logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} -> NEUTRAL")
+                    final_signal = Signal.NEUTRAL
+                    confidence = 0.0
+                else:
+                    logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} allowed")
 
         return CombinedSignal(
             final_signal=final_signal,

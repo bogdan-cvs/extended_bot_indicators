@@ -577,11 +577,14 @@ class DCABot:
             fees=status.get("total_fees", 0)
         )
 
-    async def _fetch_candles(self, market: str) -> list:
+    async def _fetch_candles(self, market: str) -> dict:
         """
         Fetch historical candles for indicator calculation.
 
         Extended Exchange API: /api/v1/info/candles/{market}/trades
+
+        Returns:
+            Dict with 'open', 'high', 'low', 'close' lists, or empty dict on error
         """
         try:
             # Map timeframe in seconds to Extended Exchange interval
@@ -610,19 +613,26 @@ class DCABot:
                             candles = result["data"]
                             # Extended Exchange format: {"o": open, "h": high, "l": low, "c": close, "v": volume, "T": timestamp}
                             # Note: candles are sorted descending by timestamp, so we reverse
-                            prices = [float(candle["c"]) for candle in reversed(candles)]
+                            reversed_candles = list(reversed(candles))
 
-                            if prices:
-                                logger.debug(f"[INDICATORS] Fetched {len(prices)} candles, latest close: ${prices[-1]:.2f}")
-                                return prices
+                            ohlc = {
+                                "open": [float(c["o"]) for c in reversed_candles],
+                                "high": [float(c["h"]) for c in reversed_candles],
+                                "low": [float(c["l"]) for c in reversed_candles],
+                                "close": [float(c["c"]) for c in reversed_candles],
+                            }
+
+                            if ohlc["close"]:
+                                logger.debug(f"[INDICATORS] Fetched {len(ohlc['close'])} candles, latest close: ${ohlc['close'][-1]:.2f}")
+                                return ohlc
                     else:
                         logger.warning(f"[INDICATORS] Extended Exchange API error: {response.status}")
 
-            return []
+            return {}
 
         except Exception as e:
             logger.error(f"[INDICATORS] Error fetching candles: {e}")
-            return []
+            return {}
 
     async def _check_indicator_signal(self, market: str) -> tuple:
         """
@@ -645,12 +655,14 @@ class DCABot:
 
         self._last_indicator_check = now
 
-        # Fetch candles
-        prices = await self._fetch_candles(market)
-        if len(prices) < 200:
-            logger.warning(f"[INDICATORS] Not enough candles: {len(prices)} < 200 needed for EMA200")
-            return False, f"Not enough data ({len(prices)} candles)", None, None
+        # Fetch candles (now returns OHLC dict)
+        ohlc = await self._fetch_candles(market)
+        if not ohlc or len(ohlc.get("close", [])) < 200:
+            candle_count = len(ohlc.get("close", [])) if ohlc else 0
+            logger.warning(f"[INDICATORS] Not enough candles: {candle_count} < 200 needed for EMA200")
+            return False, f"Not enough data ({candle_count} candles)", None, None
 
+        prices = ohlc["close"]
         self._cached_prices = prices
 
         # Get indicator settings from config
@@ -658,6 +670,7 @@ class DCABot:
         macd_config = self.indicators_config.get("macd", {})
         bb_config = self.indicators_config.get("bollinger", {})
         ema_config = self.indicators_config.get("ema", {})
+        adx_config = self.indicators_config.get("adx", {})
 
         # Initialize indicators with config
         self.indicators = TechnicalIndicators(
@@ -680,6 +693,11 @@ class DCABot:
         use_bb = bb_config.get("enabled", True)
         use_ema = ema_config.get("enabled", True)
 
+        # ADX filter settings
+        use_adx = adx_config.get("enabled", False)
+        adx_min_strength = adx_config.get("min_strength", 20.0)
+        adx_period = adx_config.get("period", 14)
+
         signal = self.indicators.get_combined_signal(
             prices=prices,
             use_rsi=use_rsi,
@@ -687,6 +705,12 @@ class DCABot:
             use_bollinger=use_bb,
             use_ema=use_ema,
             min_confirmations=self._min_confirmations,
+            # ADX filter parameters
+            high=ohlc["high"] if use_adx else None,
+            low=ohlc["low"] if use_adx else None,
+            use_adx_filter=use_adx,
+            adx_min_strength=adx_min_strength,
+            adx_period=adx_period,
         )
 
         # Log indicator values
