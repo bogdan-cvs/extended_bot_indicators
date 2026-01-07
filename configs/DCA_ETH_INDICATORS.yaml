@@ -40,8 +40,8 @@ dca:
   safety_order_volume_scale: 1.2
 
   # Take profit target (% from average entry price)
-  # 2.5% TP for indicator-based entries (higher confidence)
-  take_profit_pct: 2.5
+  # 3% TP for 1:1 risk:reward with 3% SL
+  take_profit_pct: 3.0
 
   # Trailing take profit (follow price up)
   trailing_take_profit: false
