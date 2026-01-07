@@ -808,33 +808,37 @@ class DCAStrategy:
             if fills:
                 logger.info(f"[DCA] Sample fill: {fills[0]}")
 
-            # Sum all fees from recent fills (simpler approach - sum all)
+            # Match fills by quantity - sum fees for fills matching this trade's size
+            # Extended Exchange createdTime is not a real timestamp, so match by qty instead
             total_fees = 0.0
-            trade_start = trade.started_at
-            trade_end = trade.closed_at or time.time()
+            trade_qty = trade.total_size
+            matched_fills = 0
+            remaining_qty = trade_qty
 
             for fill in fills:
-                # Try multiple timestamp field names
-                fill_time = 0
-                for ts_field in ["timestamp", "time", "createdAt", "created_at", "executedAt"]:
-                    if ts_field in fill:
-                        fill_time = float(fill[ts_field])
-                        break
+                fill_qty = float(fill.get("qty", fill.get("size", fill.get("quantity", 0))))
 
-                if fill_time > 1e12:  # milliseconds
-                    fill_time = fill_time / 1000
-
-                # Check if fill is within trade timeframe (with buffer)
-                if fill_time == 0 or (trade_start - 120 <= fill_time <= trade_end + 120):
-                    # Try multiple fee field names
+                # Match fills that could be part of this trade
+                if fill_qty > 0 and remaining_qty > 0:
+                    # Get fee value
                     fee = 0.0
                     for fee_field in ["fee", "payedFee", "tradingFee", "commission", "feeAmount"]:
                         if fee_field in fill and fill[fee_field]:
                             fee = float(fill[fee_field])
                             break
-                    total_fees += abs(fee)
 
-            logger.debug(f"[DCA] Total fees calculated: ${total_fees:.4f} from {len(fills)} fills")
+                    if fee > 0:
+                        # Proportionally allocate fee if fill is larger than remaining
+                        if fill_qty <= remaining_qty * 1.1:  # 10% tolerance
+                            total_fees += abs(fee)
+                            remaining_qty -= fill_qty
+                            matched_fills += 1
+
+                        # Stop after matching enough quantity
+                        if remaining_qty <= 0:
+                            break
+
+            logger.info(f"[DCA] Fees: ${total_fees:.4f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
             return total_fees
 
         except Exception as e:
