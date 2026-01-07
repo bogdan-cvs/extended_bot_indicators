@@ -358,37 +358,56 @@ class TechnicalIndicators:
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        # Step 3: Wilder smoothing (similar to EMA but with different alpha)
-        def wilder_smooth(data: np.ndarray, period: int) -> np.ndarray:
-            """Wilder's smoothing method."""
-            smoothed = np.zeros_like(data, dtype=float)
-            # First value is sum of first 'period' values
-            smoothed[period - 1] = np.sum(data[:period])
-            for i in range(period, len(data)):
-                smoothed[i] = smoothed[i - 1] - (smoothed[i - 1] / period) + data[i]
-            return smoothed
+        # Step 3: Calculate smoothed TR, +DM, -DM using Wilder's method
+        # Wilder's smoothing: first value = SUM of first N, then smooth = prev - (prev/N) + current
+        n = len(tr)
 
-        atr = wilder_smooth(tr, period)
-        plus_dm_smooth = wilder_smooth(plus_dm, period)
-        minus_dm_smooth = wilder_smooth(minus_dm, period)
+        # Initialize arrays
+        atr = np.zeros(n)
+        smoothed_plus_dm = np.zeros(n)
+        smoothed_minus_dm = np.zeros(n)
 
-        # Step 4: Calculate +DI and -DI
+        # First smoothed value = sum of first 'period' values
+        atr[period - 1] = np.sum(tr[:period])
+        smoothed_plus_dm[period - 1] = np.sum(plus_dm[:period])
+        smoothed_minus_dm[period - 1] = np.sum(minus_dm[:period])
+
+        # Apply Wilder smoothing
+        for i in range(period, n):
+            atr[i] = atr[i - 1] - (atr[i - 1] / period) + tr[i]
+            smoothed_plus_dm[i] = smoothed_plus_dm[i - 1] - (smoothed_plus_dm[i - 1] / period) + plus_dm[i]
+            smoothed_minus_dm[i] = smoothed_minus_dm[i - 1] - (smoothed_minus_dm[i - 1] / period) + minus_dm[i]
+
+        # Step 4: Calculate +DI and -DI (as percentage)
         # Avoid division by zero
-        atr_safe = np.where(atr == 0, 1, atr)
-        plus_di = (plus_dm_smooth / atr_safe) * 100
-        minus_di = (minus_dm_smooth / atr_safe) * 100
+        plus_di = np.zeros(n)
+        minus_di = np.zeros(n)
+
+        for i in range(period - 1, n):
+            if atr[i] > 0:
+                plus_di[i] = (smoothed_plus_dm[i] / atr[i]) * 100
+                minus_di[i] = (smoothed_minus_dm[i] / atr[i]) * 100
 
         # Step 5: Calculate DX
-        di_sum = plus_di + minus_di
-        di_sum_safe = np.where(di_sum == 0, 1, di_sum)
-        dx = (np.abs(plus_di - minus_di) / di_sum_safe) * 100
+        dx = np.zeros(n)
+        for i in range(period - 1, n):
+            di_sum = plus_di[i] + minus_di[i]
+            if di_sum > 0:
+                dx[i] = (abs(plus_di[i] - minus_di[i]) / di_sum) * 100
 
-        # Step 6: ADX = Wilder smoothed DX
-        adx = wilder_smooth(dx, period)
+        # Step 6: ADX = Wilder smoothed DX (starting after we have enough DX values)
+        adx = np.zeros(n)
+        # First ADX = average of first 'period' DX values (starting from index period-1)
+        start_idx = period - 1 + period
+        if start_idx < n:
+            adx[start_idx - 1] = np.mean(dx[period - 1:start_idx])
 
-        # Return last values (after sufficient warmup)
-        idx = -1
-        return (float(adx[idx]), float(plus_di[idx]), float(minus_di[idx]))
+            # Apply Wilder smoothing to ADX
+            for i in range(start_idx, n):
+                adx[i] = ((adx[i - 1] * (period - 1)) + dx[i]) / period
+
+        # Return last values
+        return (float(adx[-1]), float(plus_di[-1]), float(minus_di[-1]))
 
     def get_adx_filter(
         self,
