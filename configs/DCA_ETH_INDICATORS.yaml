@@ -31,7 +31,7 @@ dca:
   safety_order_size_usd: 90.0
 
   # Price deviation to trigger first safety order (%)
-  price_deviation_pct: 0.15
+  price_deviation_pct: 0.10
 
   # Safety order step scale (multiplier for distance between SOs)
   safety_order_step_scale: 1.0
