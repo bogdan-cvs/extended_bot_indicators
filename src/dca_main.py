@@ -719,7 +719,11 @@ class DCABot:
         # Log indicator values
         indicator_summary = []
         for ind in signal.indicators:
-            indicator_summary.append(f"{ind.name}={ind.signal.value}({ind.value:.2f})")
+            if ind.name == "ADX":
+                # ADX: show value and DI direction (stored in details)
+                indicator_summary.append(f"{ind.name}={ind.value:.1f}({ind.details})")
+            else:
+                indicator_summary.append(f"{ind.name}={ind.signal.value}({ind.value:.2f})")
 
         logger.info(
             f"[INDICATORS] {' | '.join(indicator_summary)} | "

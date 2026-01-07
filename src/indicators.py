@@ -604,33 +604,40 @@ class TechnicalIndicators:
             final_signal = Signal.NEUTRAL
             confidence = neutral_count / total if total > 0 else 0.0
 
-        # Apply ADX filter if enabled and we have a directional signal
+        # Apply ADX filter if enabled
         adx_info = None
-        if use_adx_filter and final_signal != Signal.NEUTRAL:
-            if high is not None and low is not None:
-                # Pass signal direction to check DI confirmation
-                signal_direction = final_signal.value  # "LONG" or "SHORT"
-                is_strong, adx_value, adx_desc = self.get_adx_filter(
-                    high, low, prices, adx_min_strength, adx_period,
-                    signal_direction=signal_direction,
-                    require_di_confirmation=True
-                )
+        if use_adx_filter and high is not None and low is not None:
+            # Calculate ADX and DI direction (always show in logs)
+            adx_result = self.calculate_adx(high, low, prices, adx_period)
+            if adx_result:
+                adx_value, plus_di, minus_di = adx_result
+                di_direction = "BULLISH" if plus_di > minus_di else "BEARISH"
+
                 # Add ADX as an indicator result for logging
                 adx_info = IndicatorResult(
                     name="ADX",
                     signal=Signal.NEUTRAL,  # ADX doesn't provide direction
                     value=adx_value,
-                    details=adx_desc
+                    details=di_direction  # Store DI direction for log display
                 )
                 indicators.append(adx_info)
 
-                if not is_strong:
-                    # Weak trend or DI conflict - filter out the signal
-                    logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} -> NEUTRAL")
-                    final_signal = Signal.NEUTRAL
-                    confidence = 0.0
-                else:
-                    logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} allowed")
+                # Apply filter only if we have a directional signal
+                if final_signal != Signal.NEUTRAL:
+                    signal_direction = final_signal.value  # "LONG" or "SHORT"
+                    is_strong, _, adx_desc = self.get_adx_filter(
+                        high, low, prices, adx_min_strength, adx_period,
+                        signal_direction=signal_direction,
+                        require_di_confirmation=True
+                    )
+
+                    if not is_strong:
+                        # Weak trend or DI conflict - filter out the signal
+                        logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} -> NEUTRAL")
+                        final_signal = Signal.NEUTRAL
+                        confidence = 0.0
+                    else:
+                        logger.info(f"[ADX FILTER] {adx_desc} - Signal {final_signal.value} allowed")
 
         return CombinedSignal(
             final_signal=final_signal,
