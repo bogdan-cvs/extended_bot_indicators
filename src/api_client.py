@@ -276,7 +276,7 @@ class ExtendedAPIClient:
         params = {"limit": limit}
         if market:
             params["market"] = market
-        return await self._request("GET", "/user/fills", params=params)
+        return await self._request("GET", "/user/trades", params=params)
     
     async def get_fees(self, market: str) -> APIResponse:
         """Get fee rates for a market."""

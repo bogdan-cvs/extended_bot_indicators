@@ -808,7 +808,8 @@ class DCAStrategy:
 
                 # Check if fill is within trade timeframe (with some buffer)
                 if trade_start - 60 <= fill_time <= trade_end + 60:
-                    fee = float(fill.get("fee", fill.get("tradingFee", 0)))
+                    # Extended Exchange uses "fee" or "payedFee"
+                    fee = float(fill.get("fee", fill.get("payedFee", fill.get("tradingFee", 0))))
                     total_fees += abs(fee)
 
             return total_fees

@@ -31,7 +31,7 @@ dca:
   safety_order_size_usd: 90.0
 
   # Price deviation to trigger first safety order (%)
-  price_deviation_pct: 0.25
+  price_deviation_pct: 0.15
 
   # Safety order step scale (multiplier for distance between SOs)
   safety_order_step_scale: 1.0
@@ -48,8 +48,8 @@ dca:
   trailing_deviation_pct: 0.5
 
   # Stop loss (% from average entry, 0 = disabled)
-  # 2.5% SL for 1:1 risk:reward ratio
-  stop_loss_pct: 2.5
+  # 3% SL to allow SO1 (0.15% deviation) to trigger before SL
+  stop_loss_pct: 3.0
 
   # Entry conditions
   start_immediately: false  # Wait for indicator signal
