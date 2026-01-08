@@ -51,6 +51,11 @@ dca:
   # 3% SL to allow SO1 (0.15% deviation) to trigger before SL
   stop_loss_pct: 3.0
 
+  # Leverage (for price-based TP/SL calculation)
+  # TP/SL threshold = configured_pct / leverage
+  # e.g., 3% TP with 20x leverage = 0.15% price movement needed
+  leverage: 20.0
+
   # Entry conditions
   start_immediately: false  # Wait for indicator signal
 

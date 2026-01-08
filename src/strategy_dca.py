@@ -91,6 +91,9 @@ class DCAConfig:
     # Stop loss
     stop_loss_pct: float = 0.0         # 0 = disabled, e.g. 15.0 = -15% loss
 
+    # Leverage (for price-based TP/SL calculation)
+    leverage: float = 20.0             # Used to calculate TP/SL from price movement
+
     # Entry conditions
     start_immediately: bool = True     # Start trade immediately or wait for signal
     cooldown_between_trades_sec: float = 60.0  # Wait time after trade completes
@@ -669,21 +672,32 @@ class DCAStrategy:
             else:
                 unrealized_pnl = self._calculate_pnl(trade, current_price)
 
-            # Calculate PnL percentage based on INITIAL margin (base_order_cost)
-            # This ensures TP/SL are always relative to the initial investment, not total margin
-            base_margin = trade.base_order_cost if trade.base_order_cost > 0 else trade.total_cost
-            pnl_pct = (unrealized_pnl / base_margin * 100) if base_margin > 0 else 0
+            # Calculate price change percentage from average entry
+            # TP/SL threshold = configured_pct / leverage
+            # e.g., 3% TP with 20x leverage = 0.15% price movement needed
+            price_change_pct = abs(current_price - trade.average_price) / trade.average_price * 100
+            tp_sl_threshold = self.config.take_profit_pct / self.config.leverage  # e.g., 3% / 20 = 0.15%
+            sl_threshold = self.config.stop_loss_pct / self.config.leverage if self.config.stop_loss_pct > 0 else 0
+
+            # Determine if price moved favorably or against us
+            if self.config.direction == DCADirection.LONG:
+                is_profitable = current_price > trade.average_price
+            else:  # SHORT
+                is_profitable = current_price < trade.average_price
 
             # Log PnL values for debugging
             logger.debug(
-                f"[DCA] PnL check: exchange_pnl={exchange_pnl}, unrealized_pnl={unrealized_pnl:.4f}, "
-                f"pnl_pct={pnl_pct:.4f}% (base_margin=${base_margin:.2f}), TP threshold={self.config.take_profit_pct}%"
+                f"[DCA] PnL check: price=${current_price:.2f}, avg_entry=${trade.average_price:.2f}, "
+                f"price_change={price_change_pct:.4f}%, TP threshold={tp_sl_threshold:.4f}%, "
+                f"unrealized_pnl=${unrealized_pnl:.4f}, profitable={is_profitable}"
             )
 
-            # Check take profit based on PnL percentage of initial margin
-            if pnl_pct >= self.config.take_profit_pct:
+            # Check take profit based on price change percentage
+            if is_profitable and price_change_pct >= tp_sl_threshold:
                 logger.info(
-                    f"[DCA] TAKE PROFIT triggered! PnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}% of base margin ${base_margin:.2f}) >= {self.config.take_profit_pct}%"
+                    f"[DCA] TAKE PROFIT triggered! Price moved {price_change_pct:.3f}% "
+                    f"(threshold: {tp_sl_threshold:.3f}% = {self.config.take_profit_pct}%/{self.config.leverage}x), "
+                    f"PnL: ${unrealized_pnl:.4f}"
                 )
                 await self._close_trade(trade, "take_profit", current_price)
                 return
@@ -693,10 +707,12 @@ class DCAStrategy:
                 sl_price = self.calculate_stop_loss_price(trade.average_price)
                 trade.stop_loss_price = sl_price
 
-                # Check based on PnL percentage of initial margin (negative)
-                if pnl_pct <= -self.config.stop_loss_pct:
+                # Check based on price change percentage (against us)
+                if not is_profitable and price_change_pct >= sl_threshold:
                     logger.warning(
-                        f"[DCA] STOP LOSS triggered! PnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}% of base margin ${base_margin:.2f}) <= -{self.config.stop_loss_pct}%"
+                        f"[DCA] STOP LOSS triggered! Price moved {price_change_pct:.3f}% against us "
+                        f"(threshold: {sl_threshold:.3f}% = {self.config.stop_loss_pct}%/{self.config.leverage}x), "
+                        f"PnL: ${unrealized_pnl:.4f}"
                     )
                     await self._close_trade(trade, "stop_loss", current_price)
                     return

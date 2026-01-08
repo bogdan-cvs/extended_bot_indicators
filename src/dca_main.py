@@ -826,6 +826,7 @@ def load_dca_config(profile_name: str) -> tuple:
         trailing_take_profit=bool(dca_dict.get("trailing_take_profit", False)),
         trailing_deviation_pct=float(dca_dict.get("trailing_deviation_pct", 0.5)),
         stop_loss_pct=float(dca_dict.get("stop_loss_pct", 0.0)),
+        leverage=float(dca_dict.get("leverage", 20.0)),
         start_immediately=bool(dca_dict.get("start_immediately", True)),
         cooldown_between_trades_sec=float(dca_dict.get("cooldown_between_trades_sec", 60.0)),
         entry_refresh_seconds=float(dca_dict.get("entry_refresh_seconds", 60.0)),
