@@ -137,6 +137,7 @@ class DCATrade:
     total_size: float = 0.0           # Total position size
     total_cost: float = 0.0           # Total USD spent/received
     average_price: float = 0.0        # Average entry price
+    base_order_cost: float = 0.0      # Initial margin (for TP/SL calculation)
 
     # Take profit
     take_profit_price: float = 0.0
@@ -359,6 +360,7 @@ class DCAStrategy:
 
         trade.base_order_price = base_price
         trade.base_order_size = base_size
+        trade.base_order_cost = self.config.base_order_size_usd  # Save initial margin for TP/SL
 
         # Calculate safety orders based on entry price
         trade.safety_orders = self.calculate_safety_orders(base_price)
@@ -661,27 +663,27 @@ class DCAStrategy:
                         )
                         break
 
-            # Use exchange PnL percentage directly if available and valid (most accurate)
-            # This matches exactly what the exchange shows
-            # Note: exchange_pnl_pct can be 0.0 when margin is 0, so we need to check that it's truly valid
-            if exchange_pnl_pct is not None and exchange_pnl is not None and abs(exchange_pnl) > 0.0001:
-                pnl_pct = exchange_pnl_pct
+            # Get unrealized PnL from exchange or calculate locally
+            if exchange_pnl is not None and abs(exchange_pnl) > 0.0001:
                 unrealized_pnl = exchange_pnl
             else:
-                # Fallback to local calculation when exchange data is not available or invalid
                 unrealized_pnl = self._calculate_pnl(trade, current_price)
-                pnl_pct = (unrealized_pnl / trade.total_cost * 100) if trade.total_cost > 0 else 0
+
+            # Calculate PnL percentage based on INITIAL margin (base_order_cost)
+            # This ensures TP/SL are always relative to the initial investment, not total margin
+            base_margin = trade.base_order_cost if trade.base_order_cost > 0 else trade.total_cost
+            pnl_pct = (unrealized_pnl / base_margin * 100) if base_margin > 0 else 0
 
             # Log PnL values for debugging
             logger.debug(
-                f"[DCA] PnL check: exchange_pnl={exchange_pnl}, exchange_pnl_pct={exchange_pnl_pct}, "
-                f"pnl_pct={pnl_pct:.4f}%, TP threshold={self.config.take_profit_pct}%"
+                f"[DCA] PnL check: exchange_pnl={exchange_pnl}, unrealized_pnl={unrealized_pnl:.4f}, "
+                f"pnl_pct={pnl_pct:.4f}% (base_margin=${base_margin:.2f}), TP threshold={self.config.take_profit_pct}%"
             )
 
-            # Check take profit based on exchange PnL percentage
+            # Check take profit based on PnL percentage of initial margin
             if pnl_pct >= self.config.take_profit_pct:
                 logger.info(
-                    f"[DCA] TAKE PROFIT triggered! xPnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}%) >= {self.config.take_profit_pct}%"
+                    f"[DCA] TAKE PROFIT triggered! PnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}% of base margin ${base_margin:.2f}) >= {self.config.take_profit_pct}%"
                 )
                 await self._close_trade(trade, "take_profit", current_price)
                 return
@@ -691,10 +693,10 @@ class DCAStrategy:
                 sl_price = self.calculate_stop_loss_price(trade.average_price)
                 trade.stop_loss_price = sl_price
 
-                # Check based on exchange PnL percentage (negative)
+                # Check based on PnL percentage of initial margin (negative)
                 if pnl_pct <= -self.config.stop_loss_pct:
                     logger.warning(
-                        f"[DCA] STOP LOSS triggered! xPnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}%) <= -{self.config.stop_loss_pct}%"
+                        f"[DCA] STOP LOSS triggered! PnL: ${unrealized_pnl:.4f} ({pnl_pct:.3f}% of base margin ${base_margin:.2f}) <= -{self.config.stop_loss_pct}%"
                     )
                     await self._close_trade(trade, "stop_loss", current_price)
                     return
