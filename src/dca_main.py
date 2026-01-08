@@ -892,8 +892,16 @@ async def main():
     """Main entry point."""
     args = parse_args()
 
-    # Setup logging
-    setup_logging(log_level=args.log_level, json_format=False)
+    # Create logs directory if it doesn't exist
+    logs_dir = Path(__file__).parent.parent / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    # Generate log filename with timestamp
+    log_filename = logs_dir / f"dca_bot_{int(time.time())}.log"
+
+    # Setup logging (console + file)
+    setup_logging(log_level=args.log_level, json_format=False, log_file=str(log_filename))
+    logger.info(f"Logging to file: {log_filename}")
 
     # Load DCA config from profile
     try:

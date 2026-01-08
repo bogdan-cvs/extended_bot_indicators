@@ -69,10 +69,18 @@ def setup_logging(
         )
     root_logger.addHandler(console_handler)
     
-    # File handler (optional)
+    # File handler (optional) - uses same format as console
     if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(JSONFormatter())
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        if json_format:
+            file_handler.setFormatter(JSONFormatter())
+        else:
+            file_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S"
+                )
+            )
         root_logger.addHandler(file_handler)
     
     # Reduce noise from libraries
