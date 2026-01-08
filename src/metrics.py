@@ -400,6 +400,7 @@ class MetricsCollector:
             f"   Unrealized: ${metrics.pnl.unrealized_pnl:+.4f}",
             f"   Total:      ${metrics.pnl.total_pnl:+.4f}",
             f"   Fees:       ${metrics.pnl.fees_paid:.4f}",
+            f"   Net:        ${metrics.pnl.total_pnl - metrics.pnl.fees_paid:+.4f}",
             f"   Drawdown:   ${metrics.pnl.current_drawdown:.4f} (max: ${metrics.pnl.max_drawdown:.4f})",
             f"   Trades:     {metrics.pnl.total_trades} (W:{metrics.pnl.winning_trades} L:{metrics.pnl.losing_trades} | {metrics.pnl.win_rate:.1f}%)",
             "",
