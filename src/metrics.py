@@ -432,10 +432,7 @@ class MetricsCollector:
 
         report = "\n".join(report_lines)
 
-        # Print to console (for terminal display)
-        print(report)
-
-        # Also log it (for file logging)
+        # Log to both console and file
         logger.info("Metrics report" + report)
     
     def get_pnl_summary(self) -> dict:
