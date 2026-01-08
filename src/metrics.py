@@ -71,7 +71,9 @@ def setup_logging(
     
     # File handler (optional) - uses same format as console
     if log_file:
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        # Use line buffering (flush after each line) for real-time logging
+        file_stream = open(log_file, 'a', encoding='utf-8', buffering=1)
+        file_handler = logging.StreamHandler(file_stream)
         if json_format:
             file_handler.setFormatter(JSONFormatter())
         else:
