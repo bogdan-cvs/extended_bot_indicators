@@ -381,54 +381,60 @@ class MetricsCollector:
     
     def _print_summary(self, metrics: BotMetrics):
         """Print human-readable metrics summary."""
-        print("\n" + "="*60)
-        print(f"[METRICS] REPORT - {datetime.now().strftime('%H:%M:%S')}")
-        print("="*60)
-
-        # State
+        # Build report as a single string for logging
         state_icon = "[ON]" if metrics.state == "running" else "[PAUSE]" if metrics.state == "paused" else "[OFF]"
-        print(f"{state_icon} State: {metrics.state.upper()} | Market: {metrics.market}")
-
-        # PnL
         pnl_icon = "[+]" if metrics.pnl.total_pnl >= 0 else "[-]"
-        print(f"\n{pnl_icon} PnL:")
-        print(f"   Realized:   ${metrics.pnl.realized_pnl:+.4f}")
-        print(f"   Unrealized: ${metrics.pnl.unrealized_pnl:+.4f}")
-        print(f"   Total:      ${metrics.pnl.total_pnl:+.4f}")
-        print(f"   Fees:       ${metrics.pnl.fees_paid:.4f}")
-        print(f"   Drawdown:   ${metrics.pnl.current_drawdown:.4f} (max: ${metrics.pnl.max_drawdown:.4f})")
-        print(f"   Trades:     {metrics.pnl.total_trades} (W:{metrics.pnl.winning_trades} L:{metrics.pnl.losing_trades} | {metrics.pnl.win_rate:.1f}%)")
-
-        # Inventory
-        print(f"\n[INV] Inventory:")
-        print(f"   Balance:    ${metrics.inventory.account_balance:.2f}")
-        print(f"   Position:   {metrics.inventory.position_size:+.6f}")
-        print(f"   Notional:   ${metrics.inventory.position_notional:.2f}")
-        print(f"   Inventory:  ${metrics.inventory.inventory_usd:.2f} ({metrics.inventory.inventory_pct:.1f}%)")
-        print(f"   Skew:       {metrics.inventory.skew_factor:+.3f}")
-
-        # Market
-        print(f"\n[MKT] Market:")
-        print(f"   Mid Price:  ${metrics.market_data.mid_price:.4f}")
-        print(f"   Spread:     {metrics.market_data.spread_bps:.2f} bps")
-        print(f"   Volatility: {metrics.market_data.volatility_bps:.2f} bps")
-        
-        # Strategy
-        print(f"\n[STR] Strategy:")
-        print(f"   Quotes:     {metrics.strategy.quotes_placed} placed, {metrics.strategy.quotes_cancelled} cancelled")
-        print(f"   Fills:      {metrics.strategy.fills_count} (maker: {metrics.strategy.maker_fills})")
-        print(f"   Requotes:   {metrics.strategy.requotes_mid_move} (mid), {metrics.strategy.requotes_refresh} (refresh)")
-        print(f"   Pauses:     {metrics.strategy.pauses_triggered}")
-
-        # System
         ws_icon = "[WS:ON]" if metrics.system.ws_connected else "[WS:OFF]"
-        print(f"\n{ws_icon} System:")
-        print(f"   WS Messages: {metrics.system.ws_messages}")
-        print(f"   API Requests: {metrics.system.api_requests}")
-        print(f"   Errors: {metrics.system.api_errors}")
-        print(f"   Uptime: {metrics.strategy.uptime_sec/60:.1f} min")
 
-        print("="*60 + "\n")
+        report_lines = [
+            "",
+            "=" * 60,
+            f"[METRICS] REPORT - {datetime.now().strftime('%H:%M:%S')}",
+            "=" * 60,
+            f"{state_icon} State: {metrics.state.upper()} | Market: {metrics.market}",
+            "",
+            f"{pnl_icon} PnL:",
+            f"   Realized:   ${metrics.pnl.realized_pnl:+.4f}",
+            f"   Unrealized: ${metrics.pnl.unrealized_pnl:+.4f}",
+            f"   Total:      ${metrics.pnl.total_pnl:+.4f}",
+            f"   Fees:       ${metrics.pnl.fees_paid:.4f}",
+            f"   Drawdown:   ${metrics.pnl.current_drawdown:.4f} (max: ${metrics.pnl.max_drawdown:.4f})",
+            f"   Trades:     {metrics.pnl.total_trades} (W:{metrics.pnl.winning_trades} L:{metrics.pnl.losing_trades} | {metrics.pnl.win_rate:.1f}%)",
+            "",
+            "[INV] Inventory:",
+            f"   Balance:    ${metrics.inventory.account_balance:.2f}",
+            f"   Position:   {metrics.inventory.position_size:+.6f}",
+            f"   Notional:   ${metrics.inventory.position_notional:.2f}",
+            f"   Inventory:  ${metrics.inventory.inventory_usd:.2f} ({metrics.inventory.inventory_pct:.1f}%)",
+            f"   Skew:       {metrics.inventory.skew_factor:+.3f}",
+            "",
+            "[MKT] Market:",
+            f"   Mid Price:  ${metrics.market_data.mid_price:.4f}",
+            f"   Spread:     {metrics.market_data.spread_bps:.2f} bps",
+            f"   Volatility: {metrics.market_data.volatility_bps:.2f} bps",
+            "",
+            "[STR] Strategy:",
+            f"   Quotes:     {metrics.strategy.quotes_placed} placed, {metrics.strategy.quotes_cancelled} cancelled",
+            f"   Fills:      {metrics.strategy.fills_count} (maker: {metrics.strategy.maker_fills})",
+            f"   Requotes:   {metrics.strategy.requotes_mid_move} (mid), {metrics.strategy.requotes_refresh} (refresh)",
+            f"   Pauses:     {metrics.strategy.pauses_triggered}",
+            "",
+            f"{ws_icon} System:",
+            f"   WS Messages: {metrics.system.ws_messages}",
+            f"   API Requests: {metrics.system.api_requests}",
+            f"   Errors: {metrics.system.api_errors}",
+            f"   Uptime: {metrics.strategy.uptime_sec/60:.1f} min",
+            "=" * 60,
+            ""
+        ]
+
+        report = "\n".join(report_lines)
+
+        # Print to console (for terminal display)
+        print(report)
+
+        # Also log it (for file logging)
+        logger.info("Metrics report" + report)
     
     def get_pnl_summary(self) -> dict:
         """Get PnL summary for logging."""
