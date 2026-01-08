@@ -878,7 +878,8 @@ class DCAStrategy:
             # Calculate average exit price
             exit_price = total_value / total_qty if total_qty > 0 else None
 
-            logger.info(f"[DCA] Fees: ${total_fees:.4f}, PnL from fills: ${total_pnl:.4f}, Exit price: ${exit_price:.2f if exit_price else 0:.2f} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
+            exit_price_str = f"${exit_price:.2f}" if exit_price else "N/A"
+            logger.info(f"[DCA] Fees: ${total_fees:.4f}, PnL from fills: ${total_pnl:.4f}, Exit price: {exit_price_str} from {matched_fills} fills (trade qty: {trade_qty:.4f})")
             # Return PnL only if we found a non-zero value, otherwise return None to use fallback calculation
             return total_fees, total_pnl if (matched_fills > 0 and abs(total_pnl) > 0.0001) else None, exit_price
 
