@@ -14,6 +14,8 @@ from pathlib import Path
 
 from .config import BotConfig
 
+logger = logging.getLogger(__name__)
+
 
 class JSONFormatter(logging.Formatter):
     """JSON formatter for structured logging."""
